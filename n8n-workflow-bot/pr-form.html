@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PR Attachment Validation Agent</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:system-ui,-apple-system,sans-serif;background:#f0f2f5;min-height:100vh;padding:24px}
+.wrap{max-width:1100px;margin:0 auto;display:grid;grid-template-columns:1fr 1fr;gap:24px}
+@media(max-width:700px){.wrap{grid-template-columns:1fr}}
+.panel{background:#fff;border-radius:14px;padding:28px;box-shadow:0 2px 12px rgba(0,0,0,.08)}
+h1{font-size:1.1rem;font-weight:700;color:#1e1b4b;margin-bottom:20px;display:flex;align-items:center;gap:8px}
+h1 .tag{font-size:.7rem;background:#e0e7ff;color:#4338ca;padding:2px 8px;border-radius:20px;font-weight:600;letter-spacing:.04em}
+.field{margin-bottom:16px}
+label{display:block;font-size:.825rem;font-weight:600;color:#374151;margin-bottom:6px}
+label .req{color:#dc2626;margin-left:2px}
+select,input[type=text],textarea{width:100%;padding:10px 13px;border:1.5px solid #e5e7eb;border-radius:9px;font-size:.9rem;font-family:inherit;color:#111;transition:border-color .15s,box-shadow .15s;background:#fafafa}
+select:focus,input:focus,textarea:focus{outline:none;border-color:#6366f1;box-shadow:0 0 0 3px rgba(99,102,241,.12);background:#fff}
+textarea{resize:vertical;min-height:110px;font-family:'Courier New',monospace;font-size:.82rem}
+.hint{font-size:.75rem;color:#9ca3af;margin-top:4px}
+/* Attachment section */
+#attach-section{margin-top:18px;padding-top:18px;border-top:1.5px dashed #e5e7eb;display:none}
+#attach-section.show{display:block}
+#attach-notice{background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:10px 14px;font-size:.82rem;color:#1d4ed8;margin-bottom:14px;display:none}
+#attach-notice.show{display:block}
+.file-slot{background:#f9fafb;border:1.5px dashed #d1d5db;border-radius:9px;padding:14px;margin-bottom:12px}
+.file-slot label{font-size:.8rem;color:#6b7280;font-weight:500;margin-bottom:6px}
+.file-slot select{margin-bottom:8px}
+.file-slot input[type=file]{font-size:.85rem;color:#374151;width:100%;cursor:pointer}
+/* Submit */
+button[type=submit]{width:100%;padding:13px;background:#6366f1;color:#fff;border:none;border-radius:9px;font-size:.95rem;font-weight:700;cursor:pointer;margin-top:6px;transition:background .2s,transform .1s;letter-spacing:.02em}
+button[type=submit]:hover{background:#4f46e5}
+button[type=submit]:active{transform:scale(.99)}
+button[type=submit]:disabled{background:#a5b4fc;cursor:not-allowed;transform:none}
+/* Chat panel */
+.chat-wrap{display:flex;flex-direction:column;min-height:500px}
+#chat-box{flex:1;overflow-y:auto;min-height:400px;padding:4px 0}
+.msg{padding:14px 16px;border-radius:10px;margin-bottom:12px;font-size:.875rem;line-height:1.6}
+.msg.system{background:#f3f4f6;color:#6b7280;font-style:italic}
+.msg.loading{background:#eff6ff;border:1px solid #bfdbfe;color:#1e40af}
+.msg.result{background:#f0fdf4;border:1px solid #bbf7d0}
+.msg.error-msg{background:#fef2f2;border:1px solid #fecaca}
+/* Spinner */
+@keyframes spin{to{transform:rotate(360deg)}}
+.spin{display:inline-block;width:14px;height:14px;border:2px solid #bfdbfe;border-top-color:#3b82f6;border-radius:50%;animation:spin .7s linear infinite;vertical-align:middle;margin-right:7px}
+
+/* ── Injected validation result styles ── */
+.vr-block{padding:0}
+.vr-block h3{font-size:.95rem;font-weight:700;color:#111;margin-bottom:10px}
+.badge{display:inline-block;padding:4px 13px;border-radius:20px;font-size:.75rem;font-weight:700;letter-spacing:.06em;margin-bottom:12px}
+.badge.pass{background:#dcfce7;color:#166534}
+.badge.fail{background:#fee2e2;color:#991b1b}
+.badge.warn{background:#fef3c7;color:#92400e}
+.chk{list-style:none;padding:0;margin:8px 0 12px}
+.chk li{padding:3px 0;font-size:.84rem;color:#374151}
+.chk li.ok::before{content:'✓ ';color:#16a34a;font-weight:700}
+.chk li.fail::before{content:'✗ ';color:#dc2626;font-weight:700}
+.iss{list-style:disc;padding-left:18px;margin:8px 0;font-size:.83rem;color:#374151}
+.iss li{margin-bottom:3px}
+.dr{border:1.5px solid #e5e7eb;border-radius:9px;padding:12px;margin-bottom:10px}
+.dr.pass{border-color:#bbf7d0;background:#f0fdf4}
+.dr.fail{border-color:#fecaca;background:#fef2f2}
+.dr.warn{border-color:#fde68a;background:#fffbeb}
+.dr h4{font-size:.875rem;font-weight:700;margin-bottom:6px}
+.dr .st{font-size:.8rem;color:#6b7280;margin-bottom:8px}
+.warn-txt{font-size:.82rem;color:#b45309;margin-bottom:4px}
+.notes{font-size:.8rem;color:#6b7280;font-style:italic;margin-top:6px}
+.meta{font-size:.84rem;margin-bottom:5px;color:#374151}
+.doc-sec{margin-bottom:12px}
+.doc-sec h4{font-size:.84rem;font-weight:600;color:#4b5563;border-bottom:1px solid #e5e7eb;padding-bottom:4px;margin-bottom:6px}
+.verdict{font-weight:700;padding:9px 14px;border-radius:8px;margin-top:12px;font-size:.875rem}
+.verdict.pass{background:#dcfce7;color:#166534}
+.verdict.fail{background:#fee2e2;color:#991b1b}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- ── Form panel ── -->
+  <div class="panel">
+    <h1>PR Validation Form <span class="tag">AGENT</span></h1>
+    <form id="pr-form" autocomplete="off">
+
+      <div class="field">
+        <label for="prType">PR Type <span class="req">*</span></label>
+        <select id="prType" name="prType" required>
+          <option value="">— Select PR Type —</option>
+          <option value="Supply PR (APD)">Supply PR (APD — As Per Drawing)</option>
+          <option value="Supply PR (Non-APD)">Supply PR (Non-APD)</option>
+          <option value="Supply PR (FTP – First Time Purchase)">Supply PR (FTP — First Time Purchase)</option>
+          <option value="PAC PR">PAC PR</option>
+          <option value="Service PR">Service PR</option>
+        </select>
+      </div>
+
+      <div class="field">
+        <label for="prNumber">PR Number <span class="req">*</span></label>
+        <input type="text" id="prNumber" name="prNumber" placeholder="e.g. PR-2024-00123" required>
+      </div>
+
+      <div class="field">
+        <label for="itemLongText">Item Long Text</label>
+        <textarea id="itemLongText" name="itemLongText"
+          placeholder="Paste item long text lines here.&#10;APD example:&#10;APD,ITEM NAME:HOLDBACK;DRAWING NUMBER:4802-1594;POSITION OR ITEM NUMBER:P3;REVISION:0"></textarea>
+        <p class="hint">For APD PRs: paste each line as-is from the PR system. Multiple lines accepted.</p>
+      </div>
+
+      <!-- Attachment section (conditionally shown) -->
+      <div id="attach-section">
+        <div id="attach-notice"></div>
+        <div id="slots"></div>
+      </div>
+
+      <button type="submit" id="submit-btn">Validate PR</button>
+    </form>
+  </div>
+
+  <!-- ── Chat panel ── -->
+  <div class="panel chat-wrap">
+    <h1>Validation Results <span class="tag">AI</span></h1>
+    <div id="chat-box">
+      <div class="msg system">Select a PR type and fill in the form, then click <strong>Validate PR</strong> to begin.</div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+// ── Configuration ──
+const WEBHOOK = 'https://ashleymartian.app.n8n.cloud/webhook/pr-validation';
+
+// ── Slot configs per PR type ──
+const SLOTS = {
+  'Supply PR (APD)': {
+    notice: '📁 The agent will search Google Drive for drawings automatically. You may optionally attach a drawing if it is not yet in the system.',
+    noticeClass: 'show',
+    slots: [{ label: 'Drawing (optional — only if not in Drive)', types: null, required: false }]
+  },
+  'Supply PR (FTP – First Time Purchase)': {
+    slots: [{ label: 'Costing Sheet', types: null, required: true }]
+  },
+  'PAC PR': {
+    slots: [{ label: 'PAC Certificate', types: null, required: true }]
+  },
+  'Service PR': {
+    slots: [
+      { label: 'Document 1', types: ['Scope of Work','Job Safety Analysis (JSA)','Technical Skill-Set'], required: true },
+      { label: 'Document 2', types: ['Scope of Work','Job Safety Analysis (JSA)','Technical Skill-Set'], required: true },
+      { label: 'Document 3', types: ['Scope of Work','Job Safety Analysis (JSA)','Technical Skill-Set'], required: true }
+    ]
+  }
+};
+
+const prTypeEl = document.getElementById('prType');
+const attachSection = document.getElementById('attach-section');
+const attachNotice = document.getElementById('attach-notice');
+const slotsEl = document.getElementById('slots');
+const form = document.getElementById('pr-form');
+const chatBox = document.getElementById('chat-box');
+const submitBtn = document.getElementById('submit-btn');
+
+prTypeEl.addEventListener('change', () => {
+  const cfg = SLOTS[prTypeEl.value];
+  slotsEl.innerHTML = '';
+  attachNotice.className = '';
+  attachNotice.textContent = '';
+
+  if (!cfg) {
+    attachSection.className = '';
+    return;
+  }
+
+  attachSection.className = 'show';
+
+  if (cfg.notice) {
+    attachNotice.textContent = cfg.notice;
+    attachNotice.className = 'show';
+  }
+
+  cfg.slots.forEach((slot, i) => {
+    const div = document.createElement('div');
+    div.className = 'file-slot';
+    let inner = `<label>${slot.label}${slot.required ? ' <span style="color:#dc2626">*</span>' : ' (optional)'}</label>`;
+    if (slot.types) {
+      inner += `<select name="docType${i}">` + slot.types.map(t => `<option value="${t}">${t}</option>`).join('') + `</select>`;
+    } else {
+      inner += `<input type="hidden" name="docType${i}" value="${slot.label}">`;
+    }
+    inner += `<input type="file" name="file${i}" accept=".pdf,.png,.jpg,.jpeg,.xlsx,.docx"${slot.required ? ' required' : ''}>`;
+    div.innerHTML = inner;
+    slotsEl.appendChild(div);
+  });
+});
+
+function addMsg(html, cls) {
+  chatBox.innerHTML = '';
+  const d = document.createElement('div');
+  d.className = 'msg ' + cls;
+  d.innerHTML = html;
+  chatBox.appendChild(d);
+}
+
+form.addEventListener('submit', async e => {
+  e.preventDefault();
+  submitBtn.disabled = true;
+  submitBtn.textContent = 'Validating…';
+  addMsg('<span class="spin"></span> Submitting PR for validation — this may take up to 60 seconds for document checks…', 'loading');
+
+  const fd = new FormData(form);
+
+  try {
+    const res = await fetch(WEBHOOK, { method: 'POST', body: fd });
+    if (!res.ok) throw new Error(`Server error ${res.status}: ${res.statusText}`);
+    const data = await res.json();
+    if (data.responseHtml) {
+      addMsg(data.responseHtml, data.allValid ? 'result' : 'error-msg');
+    } else {
+      addMsg('<pre style="font-size:.8rem;white-space:pre-wrap">' + JSON.stringify(data, null, 2) + '</pre>', 'result');
+    }
+  } catch (err) {
+    addMsg(`<strong>Connection error:</strong> ${err.message}<br><span style="font-size:.8rem;color:#9ca3af">Check that the n8n workflow is active and the webhook URL is correct.</span>`, 'error-msg');
+  } finally {
+    submitBtn.disabled = false;
+    submitBtn.textContent = 'Validate PR';
+  }
+});
+</script>
+</body>
+</html>

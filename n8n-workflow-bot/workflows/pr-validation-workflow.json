@@ -1,0 +1,1068 @@
+{
+  "name": "PR Attachment Validation Agent",
+  "nodes": [
+    {
+      "id": "29c30c48-0642-4921-b3cb-337383801b60",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        250,
+        300
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "pr-validation",
+        "responseMode": "responseNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "376340b0-e179-4e31-8688-7b96dd6d6576",
+      "name": "Extract Form Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        500,
+        300
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const body = $input.first().json;\nconst binary = $input.first().binary || {};\nconst files = [];\nfor (const [key, b] of Object.entries(binary)) {\n  if (!b || !b.data) continue;\n  const idx = key.replace(/\\D/g,'') || '0';\n  files.push({\n    name: b.fileName || key,\n    mimeType: b.mimeType || 'application/octet-stream',\n    base64: b.data,\n    docType: body['docType' + idx] || ''\n  });\n}\nconst raw = (body.prType || '').trim();\nconst map = {\n  'Supply PR (APD)': 'APD',\n  'Supply PR (Non-APD)': 'Non-APD',\n  'Supply PR (FTP \\u2013 First Time Purchase)': 'FTP',\n  'PAC PR': 'PAC',\n  'Service PR': 'Service'\n};\nreturn [{ json: {\n  prType: map[raw] || raw,\n  prNumber: (body.prNumber || '').trim(),\n  itemLongText: (body.itemLongText || '').trim(),\n  files\n}}];"
+      }
+    },
+    {
+      "id": "07c75359-7621-4ee6-9353-f3a3e8c101bf",
+      "name": "Route by PR Type",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 1,
+      "position": [
+        750,
+        300
+      ],
+      "parameters": {
+        "dataType": "string",
+        "value1": "={{ $json.prType }}",
+        "rules": {
+          "rules": [
+            {
+              "operation": "equal",
+              "value2": "APD"
+            },
+            {
+              "operation": "equal",
+              "value2": "Non-APD"
+            },
+            {
+              "operation": "equal",
+              "value2": "FTP"
+            },
+            {
+              "operation": "equal",
+              "value2": "PAC"
+            },
+            {
+              "operation": "equal",
+              "value2": "Service"
+            }
+          ]
+        },
+        "fallbackOutput": 1
+      }
+    },
+    {
+      "id": "e72825cf-5016-46e0-85a9-2608d55571dd",
+      "name": "APD: Parse Item Long Text",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1000,
+        80
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const data = $input.first().json;\nconst lines = (data.itemLongText || '').split('\\n').filter(l => l.trim());\nconst drawings = {};\nfunction normRev(r) {\n  const c = (r || '').toUpperCase().trim();\n  return (!c || /^0+$/.test(c) || c === 'NO REVISION') ? '0' : c;\n}\nfor (const line of lines) {\n  const clean = line.replace(/^APD,/i, '');\n  const fields = {};\n  clean.split(';').forEach(part => {\n    const i = part.indexOf(':');\n    if (i > 0) fields[part.slice(0,i).trim()] = part.slice(i+1).trim();\n  });\n  const dwg = (fields['DRAWING NUMBER'] || '').trim();\n  if (!dwg) continue;\n  if (!drawings[dwg]) {\n    drawings[dwg] = {\n      drawingNumber: dwg,\n      revision: normRev(fields['REVISION']),\n      itemName: fields['ITEM NAME'] || '',\n      positions: [],\n      material: fields['MATERIAL'] || fields['MATERIAL SPECIFICATION'] || null,\n      prNumber: data.prNumber,\n      files: data.files\n    };\n  }\n  if (fields['POSITION OR ITEM NUMBER']) drawings[dwg].positions.push(fields['POSITION OR ITEM NUMBER']);\n}\nconst list = Object.values(drawings);\nif (list.length === 0) {\n  return [{ json: { drawingNumber: 'UNKNOWN', revision: '0', positions: [], material: null, prNumber: data.prNumber, files: data.files, noDrawingsFound: true }}];\n}\nreturn list.map(d => ({ json: d }));"
+      }
+    },
+    {
+      "id": "9543e000-72e1-48f5-8bd9-ffb96c372996",
+      "name": "APD: Split Drawings",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        1250,
+        80
+      ],
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      }
+    },
+    {
+      "id": "a32372b3-f8b6-4605-970c-f0a807dfe3ec",
+      "name": "APD: Search Drive",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        1500,
+        80
+      ],
+      "parameters": {
+        "resource": "file",
+        "operation": "search",
+        "queryString": "={{ \"name contains '\" + $json.drawingNumber + \"'\" + ($vars.DRIVE_DRAWINGS_FOLDER_ID ? \" and '\" + $vars.DRIVE_DRAWINGS_FOLDER_ID + \"' in parents\" : '') + \" and trashed = false\" }}",
+        "returnAll": false,
+        "limit": 5,
+        "options": {}
+      },
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "CONFIGURE_ME_DRIVE",
+          "name": "Google Drive account"
+        }
+      }
+    },
+    {
+      "id": "655f76f8-d0f9-446d-8074-676d173d9c4e",
+      "name": "APD: Drive Found?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1750,
+        80
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "cea27116-605b-403c-ada8-54cb38f97b59",
+              "leftValue": "={{ ($input.first().json.id || ($input.all().length > 0)) ? true : false }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "4906494a-232c-4c12-97d7-b2a4d9ea7230",
+      "name": "APD: Check Attachment",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2000,
+        220
+      ],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const data = $input.first().json;\nconst files = data.files || [];\nconst dwg = data.drawingNumber;\nconst match = files.find(f => f.name && f.name.toUpperCase().includes(dwg.toUpperCase()));\nif (match) {\n  return [{ json: { ...data, source: 'attachment', attachedFile: match }}];\n} else {\n  return [{ json: { ...data, source: 'missing', attachedFile: null }}];\n}"
+      }
+    },
+    {
+      "id": "6ecdc1ad-701a-417a-8759-ef1d135a6233",
+      "name": "APD: Gemini Validate Drawing",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        2250,
+        80
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googlePalmApi",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify({ contents: [{ parts: [ { text: \"You are a technical drawing validator. Examine this engineering drawing and return ONLY valid JSON with these fields: drawingNumberVisible (bool), drawingNumberMatch (bool), revisionVisible (bool), revisionMatch (bool \u2014 treat 0/00/NO REVISION as equivalent), approvalStampPresent (bool), isLegible (bool), materialMentioned (string or null), issues (array of strings), status (one of: confirmed_in_drive, validated_from_attachment, warning, blocker_not_found). Expected drawing number: \" + $json.drawingNumber + \". Expected revision: \" + $json.revision + \". Expected material: \" + ($json.material || \"not specified\") + \". Notes: \" + $json.notes + \".\" }, { inlineData: { mimeType: ($json.attachedFile ? $json.attachedFile.mimeType : \"application/pdf\"), data: ($json.attachedFile ? $json.attachedFile.base64 : \"\") } } ] }], generationConfig: { temperature: 0.1, responseMimeType: \"application/json\" } }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "credentials": {
+        "googlePalmApi": {
+          "id": "CONFIGURE_ME_GEMINI",
+          "name": "Google Gemini account"
+        }
+      }
+    },
+    {
+      "id": "c01df273-7765-47b9-bc52-55461cb59297",
+      "name": "APD: Set Missing Flag",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [
+        2250,
+        360
+      ],
+      "parameters": {
+        "mode": "manual",
+        "assignments": {
+          "assignments": [
+            {
+              "id": "a11f8941-eadc-47db-8ce5-d568ceb49e6a",
+              "name": "validationResult",
+              "value": "={{ JSON.stringify({ drawingNumber: $json.drawingNumber, status: 'blocker_not_found', issues: ['Drawing ' + $json.drawingNumber + ' not found in Google Drive and no matching attachment uploaded'], notes: 'Blocker \u2014 attach the drawing or ensure it is in the designated Drive folder' }) }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "ee2aca1b-d80d-4a9c-bb5f-bc18bf978c6b",
+      "name": "APD: Collect Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2500,
+        80
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const staticData = $getWorkflowStaticData('node');\nif (!staticData.results) staticData.results = [];\nconst item = $input.first().json;\nlet result;\nif (item.validationResult) {\n  result = item.validationResult;\n} else {\n  result = {\n    drawingNumber: item.drawingNumber,\n    status: 'blocker_not_found',\n    issues: [`Drawing ${item.drawingNumber} not found in Google Drive and no matching attachment uploaded`],\n    notes: 'Blocker \u2014 attach the drawing to proceed'\n  };\n}\nstaticData.results.push(result);\nreturn [{ json: { ...item, collected: true }}];"
+      }
+    },
+    {
+      "id": "7814a63a-7ef9-4aac-b6ff-3831f8f7dc78",
+      "name": "APD: Format Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2750,
+        80
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const staticData = $getWorkflowStaticData('node');\nconst results = staticData.results || [];\nstaticData.results = [];\nconst prNumber = ($input.first().json.prNumber) || '';\nconst blockers = results.filter(r => r.status === 'blocker_not_found' || (r.issues && r.issues.length > 0 && r.status !== 'confirmed_in_drive' && r.status !== 'validated_from_attachment'));\nconst warnings = results.filter(r => r.status === 'warning');\nconst allValid = blockers.length === 0;\nconst icons = { confirmed_in_drive:'\u2713', validated_from_attachment:'\u2713', warning:'\u26a0', blocker_not_found:'\u2717' };\nconst cardCls = { confirmed_in_drive:'pass', validated_from_attachment:'pass', warning:'warn', blocker_not_found:'fail' };\nconst statusTxt = { confirmed_in_drive:'Found in Google Drive \u2014 confirmed', validated_from_attachment:'Validated from uploaded attachment', warning:'Warning \u2014 review required', blocker_not_found:'BLOCKER \u2014 not found in Drive or as attachment' };\nlet html = `<div class=\"vr-block\"><h3>APD PR #${prNumber} \u2014 Drawing Validation</h3>`;\nhtml += `<div class=\"badge ${allValid?'pass':'fail'}\">${allValid ? 'ALL DRAWINGS VALIDATED' : `${blockers.length} BLOCKER(S) \u00b7 ${warnings.length} WARNING(S)`}</div>`;\nresults.forEach(r => {\n  const icon = icons[r.status] || '?';\n  const cc = cardCls[r.status] || '';\n  const st = statusTxt[r.status] || r.status;\n  html += `<div class=\"dr ${cc}\"><h4>${icon} ${r.drawingNumber}</h4><p class=\"st\">${st}</p>`;\n  if (r.revisionMatch === false) html += `<p class=\"warn-txt\">\u26a0 Revision mismatch</p>`;\n  if (r.approvalStampPresent === false) html += `<p class=\"warn-txt\">\u26a0 No approval stamp detected</p>`;\n  if (r.materialFlag) html += `<p class=\"warn-txt\">\u26a0 Material: ${r.materialFlag}</p>`;\n  if (r.issues && r.issues.length) { html += `<ul class=\"iss\">`; r.issues.forEach(i=>{ html+=`<li>${i}</li>`; }); html+=`</ul>`; }\n  if (r.notes) html += `<p class=\"notes\">${r.notes}</p>`;\n  html += `</div>`;\n});\nconst vt = allValid ? '\u2713 PR is ready to proceed' : `\u2717 PR has ${blockers.length} blocker(s) \u2014 resolve before submission`;\nhtml += `<p class=\"verdict ${allValid?'pass':'fail'}\">${vt}</p></div>`;\nreturn [{ json: { responseHtml: html, prType: 'APD', prNumber, allValid }}];"
+      }
+    },
+    {
+      "id": "1abf829e-8382-4aa2-bed4-f5c28341ccf1",
+      "name": "Non-APD Response",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [
+        1000,
+        300
+      ],
+      "parameters": {
+        "mode": "manual",
+        "assignments": {
+          "assignments": [
+            {
+              "id": "f6244439-2415-4851-ad9b-f7846230a033",
+              "name": "responseHtml",
+              "value": "<div class=\"vr-block\"><h3>Non-APD PR #={{ $json.prNumber }}</h3><div class=\"badge pass\">GUIDANCE PROVIDED</div><p style=\"margin:10px 0\">This is a Non-APD PR. No drawing attachment is required.</p><ul class=\"chk\"><li class=\"ok\">Ensure item description includes make, model, part number or OEM reference</li><li class=\"ok\">Supplier quotation with itemised pricing recommended</li><li class=\"ok\">Datasheet or specification for each line item recommended</li></ul><p class=\"verdict pass\">\u2713 PR is ready to proceed \u2014 standard procurement process applies</p></div>",
+              "type": "string"
+            },
+            {
+              "id": "55181575-21d9-4f68-b993-49b65fba5ca4",
+              "name": "allValid",
+              "value": "true",
+              "type": "string"
+            },
+            {
+              "id": "c33d92cb-3213-4f00-b003-3911c711a891",
+              "name": "prType",
+              "value": "Non-APD",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "83e67192-97f4-43fc-8db5-20c55b88d09b",
+      "name": "FTP: Check Attachment",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1000,
+        480
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "aa680532-07b9-4fc9-a372-d26b8211d8cd",
+              "leftValue": "={{ $json.files && $json.files.length > 0 }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "4f41369a-7701-49ab-9f57-14defa5deacf",
+      "name": "FTP: No Attachment Error",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [
+        1250,
+        600
+      ],
+      "parameters": {
+        "mode": "manual",
+        "assignments": {
+          "assignments": [
+            {
+              "id": "affdc19a-f514-4c20-9919-963e0ae63961",
+              "name": "responseHtml",
+              "value": "<div class=\"vr-block\"><h3>FTP PR #={{ $json.prNumber }}</h3><div class=\"badge fail\">BLOCKER \u2014 MISSING COSTING SHEET</div><p style=\"margin:10px 0;color:#dc2626\">No costing sheet was uploaded. A costing sheet is required for First Time Purchase PRs.</p><p class=\"verdict fail\">\u2717 PR has 1 blocker \u2014 attach the costing sheet to proceed</p></div>",
+              "type": "string"
+            },
+            {
+              "id": "cfdae0a3-9d78-4adb-b033-019e07cc2449",
+              "name": "allValid",
+              "value": "false",
+              "type": "string"
+            },
+            {
+              "id": "a36d6ab5-d694-46f3-8ba8-52ca142be9fa",
+              "name": "prType",
+              "value": "FTP",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "9f86a6d9-f84b-4830-9b67-cad7e4e3bac3",
+      "name": "FTP: Gemini Validate",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        1250,
+        480
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googlePalmApi",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify({ contents: [{ parts: [ { text: \"You are a procurement costing sheet validator. Examine this costing/quotation document and return ONLY valid JSON: { hasCostBreakdown: bool, hasValidityDate: bool, validityDate: string_or_null, isValidityExpired: bool (true if validity date is older than 6 months from today 2026-03-22), hasAuthorisingSignature: bool, issues: string_array }.\" }, { inlineData: { mimeType: $json.files[0].mimeType, data: $json.files[0].base64 } } ] }], generationConfig: { temperature: 0.1, responseMimeType: \"application/json\" } }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "credentials": {
+        "googlePalmApi": {
+          "id": "CONFIGURE_ME_GEMINI",
+          "name": "Google Gemini account"
+        }
+      }
+    },
+    {
+      "id": "dc862b94-ed2a-48ef-9c53-aa93a631497d",
+      "name": "FTP: Format Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1500,
+        480
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const gemini = $input.first().json;\nconst ctx = $('FTP: Gemini Validate').item.json;\nconst prNumber = ctx.prNumber || '';\nlet r;\ntry {\n  const txt = (gemini.candidates||[])[0]?.content?.parts?.[0]?.text || '{}';\n  const m = txt.match(/\\{[\\s\\S]*\\}/); r = m ? JSON.parse(m[0]) : {};\n} catch(e) { r = {}; }\nconst checks = [\n  ['Cost breakdown present', r.hasCostBreakdown],\n  ['Validity date present', r.hasValidityDate],\n  ['Validity not expired', !r.isValidityExpired],\n  ['Authorising signature', r.hasAuthorisingSignature]\n];\nconst ok = r.hasCostBreakdown && r.hasValidityDate && !r.isValidityExpired && r.hasAuthorisingSignature;\nlet html = `<div class=\"vr-block\"><h3>FTP PR #${prNumber} \u2014 Costing Sheet</h3>`;\nhtml += `<div class=\"badge ${ok?'pass':'fail'}\">${ok?'COSTING SHEET VALID':'COSTING SHEET HAS ISSUES'}</div>`;\nif (r.validityDate) html += `<p class=\"meta\">Validity date: <strong>${r.validityDate}</strong></p>`;\nhtml += `<ul class=\"chk\">`;\nchecks.forEach(([l,v])=>{ html+=`<li class=\"${v?'ok':'fail'}\">${l}: ${v?'Yes':'No'}</li>`; });\nhtml += `</ul>`;\nif (r.issues && r.issues.length) { html+=`<ul class=\"iss\">`; r.issues.forEach(i=>{html+=`<li>${i}</li>`;}); html+=`</ul>`; }\nconst vt = ok ? '\u2713 PR is ready to proceed' : '\u2717 PR has blockers \u2014 resolve before submission';\nhtml += `<p class=\"verdict ${ok?'pass':'fail'}\">${vt}</p></div>`;\nreturn [{ json: { responseHtml: html, prType: 'FTP', prNumber, allValid: ok }}];"
+      }
+    },
+    {
+      "id": "02522ab6-8915-4c8f-9546-7b881ac0101c",
+      "name": "PAC: Check Attachment",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1000,
+        660
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "3700f0d8-3caf-4fc7-9459-b8cdf0bd0ebc",
+              "leftValue": "={{ $json.files && $json.files.length > 0 }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "d8ce3610-4d60-42c2-a9ae-59b5a3f3b700",
+      "name": "PAC: No Attachment Error",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [
+        1250,
+        780
+      ],
+      "parameters": {
+        "mode": "manual",
+        "assignments": {
+          "assignments": [
+            {
+              "id": "6d22e0d4-47dc-40a6-9ea1-3223c994446c",
+              "name": "responseHtml",
+              "value": "<div class=\"vr-block\"><h3>PAC PR #={{ $json.prNumber }}</h3><div class=\"badge fail\">BLOCKER \u2014 MISSING PAC CERTIFICATE</div><p style=\"margin:10px 0;color:#dc2626\">No PAC certificate was uploaded. A valid PAC certificate is required.</p><p class=\"verdict fail\">\u2717 PR has 1 blocker \u2014 attach the PAC certificate to proceed</p></div>",
+              "type": "string"
+            },
+            {
+              "id": "eba3a2f3-22b8-46de-ab0c-b61ff6cd701a",
+              "name": "allValid",
+              "value": "false",
+              "type": "string"
+            },
+            {
+              "id": "1dbfd2d4-6895-4c3d-91ab-2475c1105dc5",
+              "name": "prType",
+              "value": "PAC",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "63da448b-3dc3-4cc0-9388-c769ac5f56e9",
+      "name": "PAC: Gemini Validate",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        1250,
+        660
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googlePalmApi",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify({ contents: [{ parts: [ { text: \"You are a PAC certificate validator. Examine this accreditation/PAC certificate and return ONLY valid JSON: { certNumber: string_or_null, vendorName: string_or_null, expiryDate: string_or_null, isExpired: bool, expiresWithin30Days: bool (check against today 2026-03-22), hasSignature: bool, scopeDescription: string_or_null, issues: string_array }.\" }, { inlineData: { mimeType: $json.files[0].mimeType, data: $json.files[0].base64 } } ] }], generationConfig: { temperature: 0.1, responseMimeType: \"application/json\" } }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "credentials": {
+        "googlePalmApi": {
+          "id": "CONFIGURE_ME_GEMINI",
+          "name": "Google Gemini account"
+        }
+      }
+    },
+    {
+      "id": "3eb34f4a-f47e-4dd9-9563-7da2cec2a503",
+      "name": "PAC: Format Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1500,
+        660
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const gemini = $input.first().json;\nconst ctx = $('PAC: Gemini Validate').item.json;\nconst prNumber = ctx.prNumber || '';\nlet r;\ntry {\n  const txt = (gemini.candidates||[])[0]?.content?.parts?.[0]?.text || '{}';\n  const m = txt.match(/\\{[\\s\\S]*\\}/); r = m ? JSON.parse(m[0]) : {};\n} catch(e) { r = {}; }\nconst ok = !r.isExpired && !r.expiresWithin30Days && r.hasSignature && !!r.certNumber && !!r.vendorName;\nconst checks = [\n  ['Certificate number present', !!r.certNumber],\n  ['Vendor name present', !!r.vendorName],\n  ['Certificate current (not expired)', !r.isExpired],\n  ['Not expiring within 30 days', !r.expiresWithin30Days],\n  ['Authorising signature', r.hasSignature]\n];\nlet html = `<div class=\"vr-block\"><h3>PAC PR #${prNumber} \u2014 Certificate Validation</h3>`;\nhtml += `<div class=\"badge ${ok?'pass':'fail'}\">${ok?'CERTIFICATE VALID':'CERTIFICATE HAS ISSUES'}</div>`;\nif (r.vendorName) html += `<p class=\"meta\">Vendor: <strong>${r.vendorName}</strong></p>`;\nif (r.certNumber) html += `<p class=\"meta\">Cert #: <strong>${r.certNumber}</strong></p>`;\nif (r.expiryDate) html += `<p class=\"meta\">Expiry: <strong>${r.expiryDate}</strong>${r.isExpired?' <span style=\"color:#dc2626\">\u2014 EXPIRED</span>':r.expiresWithin30Days?' <span style=\"color:#b45309\">\u2014 expires soon</span>':''}</p>`;\nhtml += `<ul class=\"chk\">`;\nchecks.forEach(([l,v])=>{ html+=`<li class=\"${v?'ok':'fail'}\">${l}: ${v?'Yes':'No'}</li>`; });\nhtml += `</ul>`;\nif (r.issues && r.issues.length) { html+=`<ul class=\"iss\">`; r.issues.forEach(i=>{html+=`<li>${i}</li>`;}); html+=`</ul>`; }\nconst vt = ok ? '\u2713 PR is ready to proceed' : '\u2717 PR has blockers \u2014 resolve before submission';\nhtml += `<p class=\"verdict ${ok?'pass':'fail'}\">${vt}</p></div>`;\nreturn [{ json: { responseHtml: html, prType: 'PAC', prNumber, allValid: ok }}];"
+      }
+    },
+    {
+      "id": "01832a5a-de5f-47a5-8fda-f8014189f8f5",
+      "name": "Service: Check 3 Docs",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1000,
+        840
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const data = $input.first().json;\nconst files = data.files || [];\nconst prNumber = data.prNumber;\nconst sow = files.find(f => (f.docType||'').toLowerCase().includes('scope'));\nconst jsa = files.find(f => (f.docType||'').toLowerCase().includes('jsa') || (f.docType||'').toLowerCase().includes('job safety'));\nconst tech = files.find(f => (f.docType||'').toLowerCase().includes('technical') || (f.docType||'').toLowerCase().includes('skill'));\nconst missing = [];\nif (!sow) missing.push('Scope of Work');\nif (!jsa) missing.push('Job Safety Analysis (JSA)');\nif (!tech) missing.push('Technical Skill-Set');\nreturn [{ json: { ...data, sowFile: sow||null, jsaFile: jsa||null, techFile: tech||null, missingDocs: missing, hasAllDocs: missing.length === 0 }}];"
+      }
+    },
+    {
+      "id": "42997cf6-e8e1-45c8-9c35-32072a9199e8",
+      "name": "Service: Any Missing?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1250,
+        840
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "90661519-7692-4a19-a67e-0173f27129b3",
+              "leftValue": "={{ $json.hasAllDocs }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "12216300-276f-4a8b-8a9f-e1d63b0489a4",
+      "name": "Service: Missing Docs Error",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [
+        1500,
+        960
+      ],
+      "parameters": {
+        "mode": "manual",
+        "assignments": {
+          "assignments": [
+            {
+              "id": "067304fd-96ae-4994-b775-05ab0f41a26f",
+              "name": "responseHtml",
+              "value": "={{ \"<div class=\\\"vr-block\\\"><h3>Service PR #\" + $json.prNumber + \"</h3><div class=\\\"badge fail\\\">BLOCKER \u2014 MISSING DOCUMENTS</div><p style=\\\"margin:10px 0;color:#dc2626\\\">Missing required documents: \" + $json.missingDocs.join(\", \") + \".</p><p style=\\\"font-size:.85rem;color:#555\\\">Upload all three documents and select the correct document type label for each.</p><p class=\\\"verdict fail\\\">\u2717 PR has \" + $json.missingDocs.length + \" blocker(s) \u2014 resolve before submission</p></div>\" }}",
+              "type": "string"
+            },
+            {
+              "id": "68d64ad1-6619-49af-ac21-3cad03fde054",
+              "name": "allValid",
+              "value": "false",
+              "type": "string"
+            },
+            {
+              "id": "20ac5d7f-af79-4d70-b5b6-e501515e03d4",
+              "name": "prType",
+              "value": "Service",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "edbf2537-ef4d-4ffb-8f8e-79ba19456a8b",
+      "name": "Service: Gemini Validate All",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        1500,
+        840
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googlePalmApi",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify({ contents: [{ parts: [ { text: \"You are a Service PR document reviewer. Three documents follow. Validate each and cross-check consistency. Return ONLY valid JSON: { scopeOfWork: { hasDeliverables: bool, hasTimeline: bool, hasAcceptanceCriteria: bool, issues: [] }, jsa: { identifiesHazards: bool, hasControlMeasures: bool, hasSafetySignature: bool, issues: [] }, technicalSkillSet: { listsQualifications: bool, issues: [] }, crossCheck: { consistent: bool, inconsistencies: [] } }.\" }, { text: \"--- SCOPE OF WORK ---\" }, { inlineData: { mimeType: $json.sowFile.mimeType, data: $json.sowFile.base64 } }, { text: \"--- JOB SAFETY ANALYSIS ---\" }, { inlineData: { mimeType: $json.jsaFile.mimeType, data: $json.jsaFile.base64 } }, { text: \"--- TECHNICAL SKILL-SET ---\" }, { inlineData: { mimeType: $json.techFile.mimeType, data: $json.techFile.base64 } } ] }], generationConfig: { temperature: 0.1, responseMimeType: \"application/json\" } }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "credentials": {
+        "googlePalmApi": {
+          "id": "CONFIGURE_ME_GEMINI",
+          "name": "Google Gemini account"
+        }
+      }
+    },
+    {
+      "id": "02d2aab3-e117-4a67-9517-627859ea0683",
+      "name": "Service: Format Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1750,
+        840
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const gemini = $input.first().json;\nconst ctx = $('Service: Gemini Validate All').item.json;\nconst prNumber = ctx.prNumber || '';\nlet r;\ntry {\n  const txt = (gemini.candidates||[])[0]?.content?.parts?.[0]?.text || '{}';\n  const m = txt.match(/\\{[\\s\\S]*\\}/); r = m ? JSON.parse(m[0]) : {};\n} catch(e) { r = {}; }\nconst sow = r.scopeOfWork || {}; const jsa = r.jsa || {}; const tech = r.technicalSkillSet || {}; const cc = r.crossCheck || {};\nconst ok = (sow.hasDeliverables && sow.hasTimeline && sow.hasAcceptanceCriteria) && (jsa.identifiesHazards && jsa.hasControlMeasures && jsa.hasSafetySignature) && tech.listsQualifications && cc.consistent;\nconst sec = (title, checks) => {\n  let h = `<div class=\"doc-sec\"><h4>${title}</h4><ul class=\"chk\">`;\n  checks.forEach(([l,v])=>{ h+=`<li class=\"${v?'ok':'fail'}\">${l}: ${v?'Yes':'No'}</li>`; });\n  return h + '</ul></div>';\n};\nlet html = `<div class=\"vr-block\"><h3>Service PR #${prNumber} \u2014 Document Validation</h3>`;\nhtml += `<div class=\"badge ${ok?'pass':'fail'}\">${ok?'ALL DOCUMENTS VALID':'DOCUMENTS REQUIRE ATTENTION'}</div>`;\nhtml += sec('Scope of Work', [['Deliverables specified', sow.hasDeliverables], ['Timeline/duration present', sow.hasTimeline], ['Acceptance criteria defined', sow.hasAcceptanceCriteria]]);\nhtml += sec('Job Safety Analysis', [['Hazards identified', jsa.identifiesHazards], ['Control measures specified', jsa.hasControlMeasures], ['Safety officer signature', jsa.hasSafetySignature]]);\nhtml += sec('Technical Skill-Set', [['Qualifications/certs listed', tech.listsQualifications]]);\nhtml += sec('Cross-Document Consistency', [['Documents consistent', cc.consistent]]);\nif (cc.inconsistencies && cc.inconsistencies.length) { html+=`<ul class=\"iss\">`; cc.inconsistencies.forEach(i=>{html+=`<li>${i}</li>`;}); html+=`</ul>`; }\nconst allIssues = [...(sow.issues||[]), ...(jsa.issues||[]), ...(tech.issues||[])];\nif (allIssues.length) { html+=`<ul class=\"iss\">`; allIssues.forEach(i=>{html+=`<li>${i}</li>`;}); html+=`</ul>`; }\nconst vt = ok ? '\u2713 PR is ready to proceed' : '\u2717 PR has blockers \u2014 resolve before submission';\nhtml += `<p class=\"verdict ${ok?'pass':'fail'}\">${vt}</p></div>`;\nreturn [{ json: { responseHtml: html, prType: 'Service', prNumber, allValid: ok }}];"
+      }
+    },
+    {
+      "id": "1e08c3af-a4c7-4557-9b77-d0ad3c57bcca",
+      "name": "Merge All Branches",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        3000,
+        300
+      ],
+      "parameters": {
+        "mode": "append",
+        "options": {}
+      }
+    },
+    {
+      "id": "f9b3d9df-f0d6-43ae-927b-edc073cc7572",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        3250,
+        300
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ responseHtml: $json.responseHtml, prType: $json.prType, prNumber: $json.prNumber, allValid: $json.allValid }) }}",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "name": "Access-Control-Allow-Origin",
+                "value": "*"
+              }
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Extract Form Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Form Data": {
+      "main": [
+        [
+          {
+            "node": "Route by PR Type",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route by PR Type": {
+      "main": [
+        [
+          {
+            "node": "APD: Parse Item Long Text",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Non-APD Response",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "FTP: Check Attachment",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "PAC: Check Attachment",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Service: Check 3 Docs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "APD: Parse Item Long Text": {
+      "main": [
+        [
+          {
+            "node": "APD: Split Drawings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "APD: Split Drawings": {
+      "main": [
+        [
+          {
+            "node": "APD: Search Drive",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "APD: Format Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "APD: Search Drive": {
+      "main": [
+        [
+          {
+            "node": "APD: Drive Found?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "APD: Drive Found?": {
+      "main": [
+        [
+          {
+            "node": "APD: Gemini Validate Drawing",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "APD: Check Attachment",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "APD: Check Attachment": {
+      "main": [
+        [
+          {
+            "node": "APD: Gemini Validate Drawing",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "APD: Set Missing Flag",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "APD: Gemini Validate Drawing": {
+      "main": [
+        [
+          {
+            "node": "APD: Collect Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "APD: Set Missing Flag": {
+      "main": [
+        [
+          {
+            "node": "APD: Collect Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "APD: Collect Results": {
+      "main": [
+        [
+          {
+            "node": "APD: Split Drawings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "APD: Format Response": {
+      "main": [
+        [
+          {
+            "node": "Merge All Branches",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Non-APD Response": {
+      "main": [
+        [
+          {
+            "node": "Merge All Branches",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "FTP: Check Attachment": {
+      "main": [
+        [
+          {
+            "node": "FTP: Gemini Validate",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "FTP: No Attachment Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FTP: Gemini Validate": {
+      "main": [
+        [
+          {
+            "node": "FTP: Format Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FTP: Format Response": {
+      "main": [
+        [
+          {
+            "node": "Merge All Branches",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "FTP: No Attachment Error": {
+      "main": [
+        [
+          {
+            "node": "Merge All Branches",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "PAC: Check Attachment": {
+      "main": [
+        [
+          {
+            "node": "PAC: Gemini Validate",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "PAC: No Attachment Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PAC: Gemini Validate": {
+      "main": [
+        [
+          {
+            "node": "PAC: Format Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PAC: Format Response": {
+      "main": [
+        [
+          {
+            "node": "Merge All Branches",
+            "type": "main",
+            "index": 3
+          }
+        ]
+      ]
+    },
+    "PAC: No Attachment Error": {
+      "main": [
+        [
+          {
+            "node": "Merge All Branches",
+            "type": "main",
+            "index": 3
+          }
+        ]
+      ]
+    },
+    "Service: Check 3 Docs": {
+      "main": [
+        [
+          {
+            "node": "Service: Any Missing?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Service: Any Missing?": {
+      "main": [
+        [
+          {
+            "node": "Service: Gemini Validate All",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Service: Missing Docs Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Service: Gemini Validate All": {
+      "main": [
+        [
+          {
+            "node": "Service: Format Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Service: Format Response": {
+      "main": [
+        [
+          {
+            "node": "Merge All Branches",
+            "type": "main",
+            "index": 4
+          }
+        ]
+      ]
+    },
+    "Service: Missing Docs Error": {
+      "main": [
+        [
+          {
+            "node": "Merge All Branches",
+            "type": "main",
+            "index": 4
+          }
+        ]
+      ]
+    },
+    "Merge All Branches": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  }
+}

@@ -1,0 +1,75 @@
+{
+  "name": "PR Drawings - Drive Folder Setup",
+  "nodes": [
+    {
+      "id": "a1b2c3d4-0001-0001-0001-000000000001",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [250, 300],
+      "parameters": {}
+    },
+    {
+      "id": "a1b2c3d4-0001-0001-0001-000000000002",
+      "name": "Create PR Drawings Folder",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [450, 300],
+      "parameters": {
+        "resource": "folder",
+        "operation": "create",
+        "name": "PR Drawings",
+        "options": {}
+      },
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "google-drive",
+          "name": "Google Drive account"
+        }
+      }
+    },
+    {
+      "id": "a1b2c3d4-0001-0001-0001-000000000003",
+      "name": "Show Folder ID",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [650, 300],
+      "parameters": {
+        "mode": "manual",
+        "assignments": {
+          "assignments": [
+            {
+              "id": "folder-id-output",
+              "name": "FOLDER_ID",
+              "value": "={{ $json.id }}",
+              "type": "string"
+            },
+            {
+              "id": "folder-name-output",
+              "name": "FOLDER_NAME",
+              "value": "={{ $json.name }}",
+              "type": "string"
+            },
+            {
+              "id": "instructions",
+              "name": "NEXT_STEP",
+              "value": "Copy the FOLDER_ID above. Go to n8n Settings → Variables → Add Variable: Name=DRIVE_DRAWINGS_FOLDER_ID, Value=<paste folder ID>",
+              "type": "string"
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Manual Trigger": {
+      "main": [[{"node": "Create PR Drawings Folder", "type": "main", "index": 0}]]
+    },
+    "Create PR Drawings Folder": {
+      "main": [[{"node": "Show Folder ID", "type": "main", "index": 0}]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
