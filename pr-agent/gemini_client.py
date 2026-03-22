@@ -1,4 +1,10 @@
-"""Gemini 1.5 Pro multimodal client — uses REST API directly (no SDK)."""
+"""Gemini 1.5 Pro multimodal client — uses REST API directly (no SDK).
+
+Each call is wrapped in an OpenTelemetry span so Langfuse captures:
+  - llm.model, llm.temperature
+  - llm.usage.prompt_tokens, llm.usage.completion_tokens
+  - error details on failure
+"""
 import base64
 import json
 import os
@@ -7,30 +13,56 @@ from typing import Optional
 
 import requests
 from dotenv import load_dotenv
+from opentelemetry import trace
 
 load_dotenv()
 
 _API_KEY = os.environ["GEMINI_API_KEY"]
 _BASE = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent"
 _HEADERS = {"Content-Type": "application/json"}
+_MODEL = "gemini-1.5-pro"
+
+tracer = trace.get_tracer(__name__)
 
 
-def _call(parts: list) -> dict:
+def _call(parts: list, call_name: str = "gemini.generate") -> dict:
     """Call Gemini with a list of content parts and return parsed JSON response."""
-    body = {
-        "contents": [{"parts": parts}],
-        "generationConfig": {"temperature": 0.1},
-    }
-    resp = requests.post(
-        f"{_BASE}?key={_API_KEY}",
-        headers=_HEADERS,
-        json=body,
-        timeout=120,
-    )
-    resp.raise_for_status()
-    data = resp.json()
-    text = data["candidates"][0]["content"]["parts"][0]["text"]
-    return _extract_json(text)
+    with tracer.start_as_current_span(call_name) as span:
+        span.set_attribute("llm.model", _MODEL)
+        span.set_attribute("llm.temperature", 0.1)
+        span.set_attribute("llm.parts_count", len(parts))
+
+        body = {
+            "contents": [{"parts": parts}],
+            "generationConfig": {"temperature": 0.1},
+        }
+        try:
+            resp = requests.post(
+                f"{_BASE}?key={_API_KEY}",
+                headers=_HEADERS,
+                json=body,
+                timeout=120,
+            )
+            resp.raise_for_status()
+        except Exception as e:
+            span.record_exception(e)
+            span.set_attribute("error", str(e))
+            raise
+
+        data = resp.json()
+
+        # Capture token usage from Gemini response
+        usage = data.get("usageMetadata", {})
+        if usage:
+            span.set_attribute("llm.usage.prompt_tokens", usage.get("promptTokenCount", 0))
+            span.set_attribute("llm.usage.completion_tokens", usage.get("candidatesTokenCount", 0))
+            span.set_attribute("llm.usage.total_tokens",
+                               usage.get("totalTokenCount", 0))
+
+        text = data["candidates"][0]["content"]["parts"][0]["text"]
+        result = _extract_json(text)
+        span.set_attribute("llm.result_keys", ",".join(result.keys()))
+        return result
 
 
 def _extract_json(text: str) -> dict:
@@ -71,7 +103,7 @@ def validate_drawing(
         f"  issues (array of strings)\n"
         f"{material_note}"
     )
-    return _call([{"text": prompt}, _inline(mime_type, file_bytes)])
+    return _call([{"text": prompt}, _inline(mime_type, file_bytes)], "gemini.validate_drawing")
 
 
 def validate_costing_sheet(file_bytes: bytes, mime_type: str) -> dict:
@@ -84,7 +116,7 @@ def validate_costing_sheet(file_bytes: bytes, mime_type: str) -> dict:
         "  hasAuthorisingSignature (bool)\n"
         "  issues (array of strings)"
     )
-    return _call([{"text": prompt}, _inline(mime_type, file_bytes)])
+    return _call([{"text": prompt}, _inline(mime_type, file_bytes)], "gemini.validate_costing_sheet")
 
 
 def validate_pac_certificate(file_bytes: bytes, mime_type: str) -> dict:
@@ -99,7 +131,7 @@ def validate_pac_certificate(file_bytes: bytes, mime_type: str) -> dict:
         "  scopeDescription (string or null)\n"
         "  issues (array of strings)"
     )
-    return _call([{"text": prompt}, _inline(mime_type, file_bytes)])
+    return _call([{"text": prompt}, _inline(mime_type, file_bytes)], "gemini.validate_pac_certificate")
 
 
 def validate_service_documents(
@@ -120,4 +152,4 @@ def validate_service_documents(
         _inline(scope_mime, scope_bytes),
         _inline(jsa_mime, jsa_bytes),
         _inline(skillset_mime, skillset_bytes),
-    ])
+    ], "gemini.validate_service_documents")
