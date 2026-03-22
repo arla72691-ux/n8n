@@ -1,0 +1,68 @@
+name: Deploy n8n Workflows
+
+on:
+  push:
+    branches:
+      - master
+      - main
+      - 'claude/**'
+    paths:
+      - 'n8n-workflow-bot/workflows/**.json'
+      - '.github/workflows/deploy-n8n-workflows.yml'
+  workflow_dispatch:
+    inputs:
+      workflow:
+        description: 'Which workflow to deploy'
+        required: true
+        default: 'both'
+        type: choice
+        options:
+          - both
+          - pr-validation-workflow
+          - pr-drive-setup-workflow
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r n8n-workflow-bot/requirements.txt
+
+      - name: Write .env
+        run: |
+          cat > n8n-workflow-bot/.env << EOF
+          N8N_API_KEY=${{ secrets.N8N_API_KEY }}
+          N8N_BASE_URL=https://ashleymartian.app.n8n.cloud
+          EOF
+
+      - name: Deploy Drive Setup Workflow
+        if: ${{ github.event_name == 'push' || inputs.workflow == 'both' || inputs.workflow == 'pr-drive-setup-workflow' }}
+        run: |
+          cd n8n-workflow-bot
+          python main.py --json workflows/pr-drive-setup-workflow.json
+
+      - name: Deploy PR Validation Workflow
+        if: ${{ github.event_name == 'push' || inputs.workflow == 'both' || inputs.workflow == 'pr-validation-workflow' }}
+        run: |
+          cd n8n-workflow-bot
+          python main.py --json workflows/pr-validation-workflow.json
+
+      - name: Summary
+        run: |
+          echo "### Deployment Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Workflows deployed to: https://ashleymartian.app.n8n.cloud" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Next steps (one-time only):**" >> $GITHUB_STEP_SUMMARY
+          echo "1. Open each workflow in n8n and assign credentials (Google Gemini + Google Drive)" >> $GITHUB_STEP_SUMMARY
+          echo "2. Run the *PR Drawings - Drive Folder Setup* workflow manually once" >> $GITHUB_STEP_SUMMARY
+          echo "3. Copy the folder ID from the output and set \`DRIVE_DRAWINGS_FOLDER_ID\` in n8n Settings → Variables" >> $GITHUB_STEP_SUMMARY
