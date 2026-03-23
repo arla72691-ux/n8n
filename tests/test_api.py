@@ -2,6 +2,7 @@
 API integration tests using FastAPI TestClient.
 """
 import pytest
+from unittest.mock import patch
 from httpx import AsyncClient, ASGITransport
 
 from app.main import app
@@ -78,3 +79,49 @@ async def test_index_page():
         r = await client.get("/")
     assert r.status_code == 200
     assert "PR Attachment Validation" in r.text
+
+
+@pytest.mark.asyncio
+async def test_validate_apd_empty_text_gives_blocker():
+    """APD PR with no item_long_text → parse failure → blocker in response."""
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        r = await client.post(
+            "/validate",
+            data={"pr_type": "Supply PR (APD)", "pr_number": "PR-APD-EMPTY"},
+        )
+    assert r.status_code == 200
+    data = r.json()
+    assert data["blocker_count"] >= 1
+    assert data["overall_status"] == "blockers"
+
+
+@pytest.mark.asyncio
+async def test_validate_apd_with_file_upload():
+    """APD PR with drawing file uploaded — request accepted, structured response returned."""
+    pdf_bytes = b"%PDF-1.4 mock drawing"
+    item_text = "APD,ITEM NAME:BRACKET;DRAWING NUMBER:TEST-001;REVISION:0;POSITION OR ITEM NUMBER:P1"
+    gemini_json = {
+        "drawing_number_match": "PASS",
+        "revision_match": "PASS",
+        "approval_stamp": "PASS",
+        "legible": "PASS",
+        "notes": "",
+    }
+    with patch("app.services.gemini_service.validate_document", return_value="{}"), \
+         patch("app.services.gemini_service.parse_json_response", return_value=gemini_json), \
+         patch("app.services.gemini_service.build_apd_drawing_prompt", return_value="p"):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            r = await client.post(
+                "/validate",
+                data={
+                    "pr_type": "Supply PR (APD)",
+                    "pr_number": "PR-APD-UPLOAD",
+                    "item_long_text": item_text,
+                },
+                files={"files": ("TEST-001-drawing.pdf", pdf_bytes, "application/pdf")},
+            )
+    assert r.status_code == 200
+    data = r.json()
+    assert "messages" in data
+    assert "overall_status" in data
+    assert "blocker_count" in data

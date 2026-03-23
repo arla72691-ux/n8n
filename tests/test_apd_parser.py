@@ -128,3 +128,15 @@ def test_items_by_drawing():
     groups = items_by_drawing(items)
     assert len(groups["DRW-001"]) == 2
     assert len(groups["DRW-002"]) == 1
+
+
+# ---------------------------------------------------------------------------
+# Edge cases — empty / blank input
+# ---------------------------------------------------------------------------
+
+def test_parse_empty_string():
+    assert parse_item_long_text("") == []
+
+
+def test_parse_only_blank_lines():
+    assert parse_item_long_text("\n\n\n") == []
