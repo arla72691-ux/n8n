@@ -12,9 +12,13 @@ from dataclasses import dataclass
 from functools import lru_cache
 from typing import Optional
 
+import httplib2
+import google_auth_httplib2
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 from google.oauth2 import service_account
+import google.auth.transport.requests
+import requests as _requests
 
 from app.config import get_settings
 
@@ -47,7 +51,17 @@ def _build_drive_service():
             sa_info, scopes=_SCOPES
         )
 
-    return build("drive", "v3", credentials=creds, cache_discovery=False)
+    # Refresh the token via a requests session that skips SSL verification
+    # (required in proxy environments with self-signed certificates)
+    no_verify_session = _requests.Session()
+    no_verify_session.verify = False
+    req = google.auth.transport.requests.Request(session=no_verify_session)
+    creds.refresh(req)
+
+    # Build the Drive API client using an httplib2 instance that also skips SSL
+    http = httplib2.Http(disable_ssl_certificate_validation=True)
+    authorized_http = google_auth_httplib2.AuthorizedHttp(creds, http=http)
+    return build("drive", "v3", http=authorized_http, cache_discovery=False)
 
 
 @lru_cache(maxsize=1)

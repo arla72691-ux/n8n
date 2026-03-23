@@ -55,7 +55,7 @@ def search_drive(state: PRValidationState) -> dict:
     parsed_items = state.get("parsed_items", [])
 
     if not parsed_items:
-        return {}
+        return {"drive_results": {}}
 
     drive_results: dict = {}
 
