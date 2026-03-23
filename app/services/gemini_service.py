@@ -39,6 +39,9 @@ def validate_document(
             types.Part.from_bytes(data=file_bytes, mime_type=mime_type),
             prompt,
         ],
+        config=types.GenerateContentConfig(
+            response_mime_type="application/json",
+        ),
     )
     return response.text
 
