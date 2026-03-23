@@ -1,7 +1,7 @@
 """
 Gemini service for multimodal document validation.
 
-Uses the google-genai SDK (google.genai) with Gemini 1.5 Pro.
+Uses the google-genai SDK (google.genai) with Gemini 2.5 Pro.
 Files are passed as inline base64 data so no server-side file upload is needed.
 """
 import base64
@@ -34,7 +34,7 @@ def validate_document(
     b64 = base64.b64encode(file_bytes).decode("utf-8")
 
     response = client.models.generate_content(
-        model="gemini-1.5-pro",
+        model="gemini-2.5-pro-preview-03-25",
         contents=[
             types.Part.from_bytes(data=file_bytes, mime_type=mime_type),
             prompt,
