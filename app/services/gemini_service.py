@@ -31,10 +31,9 @@ def validate_document(
     Returns the raw text response.
     """
     client = get_gemini_client()
-    b64 = base64.b64encode(file_bytes).decode("utf-8")
 
     response = client.models.generate_content(
-        model="gemini-2.5-pro-preview-03-25",
+        model="gemini-2.5-flash",
         contents=[
             types.Part.from_bytes(data=file_bytes, mime_type=mime_type),
             prompt,
