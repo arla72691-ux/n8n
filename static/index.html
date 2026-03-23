@@ -1,0 +1,563 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PR Attachment Validation Agent</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #f0f2f5;
+      color: #1a1a2e;
+      min-height: 100vh;
+    }
+
+    header {
+      background: #1a1a2e;
+      color: #fff;
+      padding: 16px 32px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    header h1 { font-size: 1.2rem; font-weight: 600; }
+    header span.badge {
+      background: #4f46e5;
+      color: #fff;
+      font-size: 0.7rem;
+      padding: 2px 8px;
+      border-radius: 999px;
+      letter-spacing: 0.05em;
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 24px;
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 32px 24px;
+    }
+
+    @media (max-width: 768px) {
+      .layout { grid-template-columns: 1fr; }
+    }
+
+    .card {
+      background: #fff;
+      border-radius: 12px;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+      padding: 28px;
+    }
+
+    .card h2 {
+      font-size: 1rem;
+      font-weight: 600;
+      margin-bottom: 20px;
+      color: #374151;
+      padding-bottom: 12px;
+      border-bottom: 1px solid #e5e7eb;
+    }
+
+    .form-group {
+      margin-bottom: 18px;
+    }
+
+    label {
+      display: block;
+      font-size: 0.85rem;
+      font-weight: 500;
+      color: #374151;
+      margin-bottom: 6px;
+    }
+
+    label .required {
+      color: #ef4444;
+      margin-left: 3px;
+    }
+
+    input[type="text"],
+    select,
+    textarea {
+      width: 100%;
+      padding: 10px 12px;
+      border: 1px solid #d1d5db;
+      border-radius: 8px;
+      font-size: 0.9rem;
+      color: #1a1a2e;
+      background: #fff;
+      transition: border-color 0.15s;
+      font-family: inherit;
+    }
+
+    input[type="text"]:focus,
+    select:focus,
+    textarea:focus {
+      outline: none;
+      border-color: #4f46e5;
+      box-shadow: 0 0 0 3px rgba(79,70,229,0.1);
+    }
+
+    textarea { resize: vertical; min-height: 120px; }
+
+    .hint {
+      font-size: 0.75rem;
+      color: #6b7280;
+      margin-top: 4px;
+    }
+
+    /* Attachment area */
+    #attachment-section { display: none; }
+
+    .attachment-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 10px;
+    }
+
+    .attachment-label-badge {
+      font-size: 0.72rem;
+      background: #eef2ff;
+      color: #4f46e5;
+      padding: 2px 8px;
+      border-radius: 999px;
+    }
+
+    #file-rows { display: flex; flex-direction: column; gap: 10px; }
+
+    .file-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 12px;
+      background: #f9fafb;
+      border: 1px dashed #d1d5db;
+      border-radius: 8px;
+    }
+
+    .file-row input[type="file"] {
+      flex: 1;
+      font-size: 0.85rem;
+      border: none;
+      background: transparent;
+      padding: 0;
+    }
+
+    .file-row select {
+      flex: 0 0 200px;
+      font-size: 0.82rem;
+      padding: 6px 8px;
+    }
+
+    .file-row .remove-btn {
+      background: none;
+      border: none;
+      cursor: pointer;
+      color: #9ca3af;
+      font-size: 1.1rem;
+      padding: 0 4px;
+      line-height: 1;
+    }
+    .file-row .remove-btn:hover { color: #ef4444; }
+
+    #add-file-btn {
+      margin-top: 8px;
+      background: none;
+      border: 1px dashed #4f46e5;
+      color: #4f46e5;
+      font-size: 0.82rem;
+      padding: 6px 14px;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    #add-file-btn:hover { background: #eef2ff; }
+
+    /* Submit */
+    #submit-btn {
+      width: 100%;
+      padding: 12px;
+      background: #4f46e5;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      font-size: 0.95rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.15s;
+      margin-top: 8px;
+    }
+    #submit-btn:hover:not(:disabled) { background: #4338ca; }
+    #submit-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+
+    /* Chat panel */
+    #chat-panel { display: none; }
+
+    .chat-messages {
+      min-height: 200px;
+      max-height: 520px;
+      overflow-y: auto;
+      padding: 4px 0;
+    }
+
+    .chat-message {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      padding: 10px 12px;
+      border-radius: 8px;
+      margin-bottom: 8px;
+      font-size: 0.88rem;
+      line-height: 1.5;
+    }
+
+    .chat-message.pass  { background: #f0fdf4; }
+    .chat-message.warn  { background: #fffbeb; }
+    .chat-message.block { background: #fef2f2; }
+
+    .icon {
+      font-size: 1rem;
+      flex-shrink: 0;
+      margin-top: 1px;
+    }
+
+    .overall-status {
+      margin-top: 16px;
+      padding: 12px 16px;
+      border-radius: 8px;
+      font-size: 0.9rem;
+      font-weight: 600;
+      text-align: center;
+    }
+
+    .overall-status.ready   { background: #dcfce7; color: #166534; }
+    .overall-status.blockers { background: #fee2e2; color: #991b1b; }
+    .overall-status.error   { background: #fef3c7; color: #92400e; }
+
+    /* Spinner */
+    .spinner-wrap {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 40px 0;
+      gap: 12px;
+      color: #6b7280;
+      font-size: 0.85rem;
+    }
+
+    .spinner {
+      width: 32px;
+      height: 32px;
+      border: 3px solid #e5e7eb;
+      border-top-color: #4f46e5;
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>PR Attachment Validation Agent</h1>
+  <span class="badge">LangGraph + Gemini</span>
+</header>
+
+<div class="layout">
+
+  <!-- ── Form Panel ────────────────────────────────────────────────────── -->
+  <div class="card">
+    <h2>Purchase Requisition Details</h2>
+
+    <form id="pr-form" novalidate>
+
+      <div class="form-group">
+        <label for="pr_type">PR Type <span class="required">*</span></label>
+        <select id="pr_type" name="pr_type" required onchange="onPrTypeChange()">
+          <option value="" disabled selected>— Select PR Type —</option>
+          <option value="Supply PR (APD)">Supply PR (APD — As Per Drawing)</option>
+          <option value="Supply PR (Non-APD)">Supply PR (Non-APD)</option>
+          <option value="Supply PR (FTP – First Time Purchase)">Supply PR (FTP — First Time Purchase)</option>
+          <option value="PAC PR">PAC PR</option>
+          <option value="Service PR">Service PR</option>
+        </select>
+      </div>
+
+      <div class="form-group">
+        <label for="pr_number">PR Number <span class="required">*</span></label>
+        <input type="text" id="pr_number" name="pr_number" placeholder="e.g. PR-2024-00123" required />
+      </div>
+
+      <div class="form-group" id="pr_description_group" style="display:none">
+        <label for="pr_description">PR Description</label>
+        <input type="text" id="pr_description" name="pr_description" placeholder="Brief description of the service or item" />
+      </div>
+
+      <div class="form-group" id="item_long_text_group" style="display:none">
+        <label for="item_long_text">Item Long Text <span class="required">*</span></label>
+        <textarea
+          id="item_long_text"
+          name="item_long_text"
+          placeholder="Paste APD item lines here, one per line.&#10;Example:&#10;APD,ITEM NAME:HOLDBACK;DRAWING NUMBER:4802-1594;POSITION OR ITEM NUMBER:P3;REVISION:0"
+        ></textarea>
+        <p class="hint">One APD item per line. Format: APD,ITEM NAME:...;DRAWING NUMBER:...;REVISION:...;POSITION OR ITEM NUMBER:...</p>
+      </div>
+
+      <!-- Attachment section -->
+      <div id="attachment-section" class="form-group">
+        <div class="attachment-header">
+          <label style="margin-bottom:0" id="attachment-label">Attachments</label>
+          <span class="attachment-label-badge" id="attachment-badge"></span>
+        </div>
+        <p class="hint" id="attachment-hint" style="margin-bottom:8px"></p>
+        <div id="file-rows"></div>
+        <button type="button" id="add-file-btn" onclick="addFileRow()" style="display:none">+ Add file</button>
+      </div>
+
+      <button type="submit" id="submit-btn">Validate PR</button>
+
+    </form>
+  </div>
+
+  <!-- ── Chat Panel ────────────────────────────────────────────────────── -->
+  <div class="card" id="chat-panel">
+    <h2 id="chat-title">Validation Results — <span id="chat-pr-number"></span></h2>
+    <div class="chat-messages" id="chat-messages"></div>
+    <div id="overall-status-line"></div>
+  </div>
+
+</div>
+
+<script>
+  // ── PR type configuration ──────────────────────────────────────────────
+  const PR_CONFIG = {
+    "Supply PR (APD)": {
+      showLongText: true,
+      showAttachment: true,
+      attachmentRequired: false,
+      attachmentLabel: "Drawing Attachments",
+      attachmentHint: "Optional: attach drawings not found in the system. Name files to include the drawing number.",
+      attachmentBadge: "Optional",
+      docTypes: null,         // null = free upload, no doc-type selector
+      multi: true,
+      showDescription: false,
+    },
+    "Supply PR (Non-APD)": {
+      showLongText: false,
+      showAttachment: false,
+      showDescription: false,
+    },
+    "Supply PR (FTP – First Time Purchase)": {
+      showLongText: false,
+      showAttachment: true,
+      attachmentRequired: true,
+      attachmentLabel: "Costing Sheet",
+      attachmentHint: "Required: attach the FTP costing sheet (PDF or Excel).",
+      attachmentBadge: "Required",
+      docTypes: null,
+      multi: false,
+      showDescription: false,
+    },
+    "PAC PR": {
+      showLongText: false,
+      showAttachment: true,
+      attachmentRequired: true,
+      attachmentLabel: "PAC Certificate",
+      attachmentHint: "Required: attach the PAC Certificate (PDF).",
+      attachmentBadge: "Required",
+      docTypes: null,
+      multi: false,
+      showDescription: true,
+    },
+    "Service PR": {
+      showLongText: false,
+      showAttachment: true,
+      attachmentRequired: true,
+      attachmentLabel: "Service Documents",
+      attachmentHint: "Required: attach all three documents and label each with its type.",
+      attachmentBadge: "3 Required",
+      docTypes: [
+        { value: "scope_of_work",       label: "Scope of Work" },
+        { value: "jsa",                 label: "Job Safety Analysis (JSA)" },
+        { value: "technical_skill_set", label: "Technical Skill-Set Document" },
+      ],
+      multi: true,
+      showDescription: true,
+    },
+  };
+
+  let currentConfig = null;
+
+  function onPrTypeChange() {
+    const prType = document.getElementById("pr_type").value;
+    currentConfig = PR_CONFIG[prType] || null;
+
+    // Long text
+    document.getElementById("item_long_text_group").style.display =
+      (currentConfig && currentConfig.showLongText) ? "block" : "none";
+
+    // PR description
+    document.getElementById("pr_description_group").style.display =
+      (currentConfig && currentConfig.showDescription) ? "block" : "none";
+
+    // Attachments
+    const attachSection = document.getElementById("attachment-section");
+    if (currentConfig && currentConfig.showAttachment) {
+      attachSection.style.display = "block";
+      document.getElementById("attachment-label").textContent = currentConfig.attachmentLabel;
+      document.getElementById("attachment-badge").textContent = currentConfig.attachmentBadge;
+      document.getElementById("attachment-hint").textContent = currentConfig.attachmentHint;
+      const addBtn = document.getElementById("add-file-btn");
+      addBtn.style.display = currentConfig.multi ? "block" : "none";
+      // Reset and seed file rows
+      document.getElementById("file-rows").innerHTML = "";
+      if (currentConfig.docTypes) {
+        currentConfig.docTypes.forEach(dt => addFileRow(dt.value));
+      } else {
+        addFileRow();
+      }
+    } else {
+      attachSection.style.display = "none";
+      document.getElementById("file-rows").innerHTML = "";
+    }
+  }
+
+  function addFileRow(presetDocType) {
+    const container = document.getElementById("file-rows");
+    const row = document.createElement("div");
+    row.className = "file-row";
+
+    const fileInput = document.createElement("input");
+    fileInput.type = "file";
+    fileInput.name = "files";
+    fileInput.accept = ".pdf,.png,.jpg,.jpeg,.xlsx,.xls";
+
+    row.appendChild(fileInput);
+
+    if (currentConfig && currentConfig.docTypes) {
+      const sel = document.createElement("select");
+      sel.name = "doc_types";
+      currentConfig.docTypes.forEach(dt => {
+        const opt = document.createElement("option");
+        opt.value = dt.value;
+        opt.textContent = dt.label;
+        if (dt.value === presetDocType) opt.selected = true;
+        sel.appendChild(opt);
+      });
+      row.appendChild(sel);
+    } else {
+      // Hidden doc_type input (value will be inferred server-side)
+      const hidden = document.createElement("input");
+      hidden.type = "hidden";
+      hidden.name = "doc_types";
+      hidden.value = presetDocType || "";
+      row.appendChild(hidden);
+    }
+
+    if (currentConfig && currentConfig.multi) {
+      const removeBtn = document.createElement("button");
+      removeBtn.type = "button";
+      removeBtn.className = "remove-btn";
+      removeBtn.textContent = "×";
+      removeBtn.onclick = () => row.remove();
+      row.appendChild(removeBtn);
+    }
+
+    container.appendChild(row);
+  }
+
+  // ── Form submission ────────────────────────────────────────────────────
+  document.getElementById("pr-form").addEventListener("submit", async function (e) {
+    e.preventDefault();
+
+    const prType = document.getElementById("pr_type").value;
+    const prNumber = document.getElementById("pr_number").value.trim();
+
+    if (!prType) { alert("Please select a PR type."); return; }
+    if (!prNumber) { alert("Please enter a PR Number."); return; }
+
+    // Show chat panel + spinner
+    const chatPanel = document.getElementById("chat-panel");
+    chatPanel.style.display = "block";
+    document.getElementById("chat-pr-number").textContent = prNumber;
+    document.getElementById("chat-messages").innerHTML = `
+      <div class="spinner-wrap">
+        <div class="spinner"></div>
+        <span>Validating PR — please wait…</span>
+      </div>`;
+    document.getElementById("overall-status-line").innerHTML = "";
+    chatPanel.scrollIntoView({ behavior: "smooth", block: "start" });
+
+    const submitBtn = document.getElementById("submit-btn");
+    submitBtn.disabled = true;
+
+    // Build FormData
+    const fd = new FormData(this);
+
+    try {
+      const res = await fetch("/validate", { method: "POST", body: fd });
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(`Server error ${res.status}: ${text}`);
+      }
+      const data = await res.json();
+      renderChat(data.messages || [], data.overall_status || "error", data.blocker_count || 0);
+    } catch (err) {
+      renderChat(
+        [{ icon: "✗", text: `Request failed: ${err.message}` }],
+        "error",
+        1
+      );
+    } finally {
+      submitBtn.disabled = false;
+    }
+  });
+
+  function renderChat(messages, overallStatus, blockerCount) {
+    const container = document.getElementById("chat-messages");
+    container.innerHTML = "";
+
+    if (!messages.length) {
+      container.innerHTML = '<p style="color:#6b7280;font-size:0.85rem;padding:8px 0">No validation messages returned.</p>';
+    }
+
+    messages.forEach(msg => {
+      const div = document.createElement("div");
+      let cls = "pass";
+      if (msg.icon === "✗") cls = "block";
+      else if (msg.icon === "⚠") cls = "warn";
+      div.className = `chat-message ${cls}`;
+      div.innerHTML = `<span class="icon">${msg.icon}</span><span>${escapeHtml(msg.text)}</span>`;
+      container.appendChild(div);
+    });
+
+    const statusLine = document.getElementById("overall-status-line");
+    let statusText, statusClass;
+    if (overallStatus === "ready") {
+      statusText = "✓ PR is ready to proceed";
+      statusClass = "ready";
+    } else if (overallStatus === "blockers") {
+      statusText = `✗ PR has ${blockerCount} blocker${blockerCount !== 1 ? "s" : ""} — resolve before submission`;
+      statusClass = "blockers";
+    } else {
+      statusText = "⚠ Validation encountered an error — please review manually";
+      statusClass = "error";
+    }
+    statusLine.innerHTML = `<div class="overall-status ${statusClass}">${statusText}</div>`;
+  }
+
+  function escapeHtml(str) {
+    return str
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+</script>
+</body>
+</html>
