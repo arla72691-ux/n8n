@@ -109,6 +109,9 @@ async def validate(
     langfuse_handler = None
     if settings.langfuse_enabled:
         try:
+            import logging as _logging
+            # Suppress noisy Langfuse SDK warnings (e.g. proxy/SSL connectivity errors)
+            _logging.getLogger("langfuse").setLevel(_logging.ERROR)
             from langfuse.callback import CallbackHandler
             langfuse_handler = CallbackHandler(
                 public_key=settings.langfuse_public_key,
