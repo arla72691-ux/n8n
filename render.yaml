@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: pr-validation-agent
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: GOOGLE_API_KEY
+        sync: false
+      - key: GOOGLE_DRIVE_DRAWINGS_FOLDER_ID
+        sync: false
+      - key: GOOGLE_SERVICE_ACCOUNT_JSON
+        sync: false
+      - key: LANGFUSE_PUBLIC_KEY
+        sync: false
+      - key: LANGFUSE_SECRET_KEY
+        sync: false
+      - key: LANGFUSE_HOST
+        value: https://cloud.langfuse.com
+      - key: APP_ENV
+        value: production

@@ -51,15 +51,16 @@ def _build_drive_service():
             sa_info, scopes=_SCOPES
         )
 
-    # Refresh the token via a requests session that skips SSL verification
-    # (required in proxy environments with self-signed certificates)
-    no_verify_session = _requests.Session()
-    no_verify_session.verify = False
-    req = google.auth.transport.requests.Request(session=no_verify_session)
+    # Refresh credentials.  In local proxy environments with self-signed certs
+    # set DISABLE_SSL_VERIFY=true to skip certificate validation.
+    disable_ssl = os.environ.get("DISABLE_SSL_VERIFY", "").lower() in ("1", "true", "yes")
+    session = _requests.Session()
+    session.verify = not disable_ssl
+    req = google.auth.transport.requests.Request(session=session)
     creds.refresh(req)
 
-    # Build the Drive API client using an httplib2 instance that also skips SSL
-    http = httplib2.Http(disable_ssl_certificate_validation=True)
+    # Build the Drive API client
+    http = httplib2.Http(disable_ssl_certificate_validation=disable_ssl)
     authorized_http = google_auth_httplib2.AuthorizedHttp(creds, http=http)
     return build("drive", "v3", http=authorized_http, cache_discovery=False)
 
