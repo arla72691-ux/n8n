@@ -116,6 +116,7 @@ async def validate(
 
     # Build run config — attach Langfuse if configured
     trace_id = str(uuid.uuid4())
+    logger.info("Langfuse trace starting | trace_id=%s run_name=pr-validation-%s", trace_id, pr_number)
     run_config = {
         "run_name": f"pr-validation-{pr_number}",
         "metadata": {"pr_type": pr_type, "env": settings.app_env},
@@ -157,8 +158,9 @@ async def validate(
         if langfuse_handler:
             try:
                 langfuse_handler.flush()
-            except Exception:
-                pass
+                logger.info("Langfuse CallbackHandler flushed OK | trace_id=%s", trace_id)
+            except Exception as flush_exc:
+                logger.warning("Langfuse flush failed | trace_id=%s error=%s", trace_id, flush_exc)
 
     # Build response
     messages = result_state.get("validation_messages", [])
@@ -182,7 +184,11 @@ async def validate(
                     name="blocker_count",
                     value=float(blocker_count),
                 )
-                lf.flush()
+                try:
+                    lf.flush()
+                    logger.info("Langfuse scores flushed OK | trace_id=%s", trace_id)
+                except Exception as score_flush_exc:
+                    logger.warning("Langfuse score flush failed | trace_id=%s error=%s", trace_id, score_flush_exc)
         except Exception as exc:
             logger.warning(f"Failed to record Langfuse scores: {exc}")
 
