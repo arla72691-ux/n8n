@@ -319,6 +319,13 @@
         <button type="button" id="add-file-btn" onclick="addFileRow()" style="display:none">+ Add file</button>
       </div>
 
+      <div class="form-group">
+        <label for="submitted_by">Submitted by</label>
+        <input type="text" id="submitted_by" name="submitted_by"
+               placeholder="Your name or email (optional)" />
+        <p class="hint">Used for tracking in the observability dashboard</p>
+      </div>
+
       <button type="submit" id="submit-btn">Validate PR</button>
 
     </form>

@@ -9,6 +9,7 @@ Routes:
 import logging
 import mimetypes
 import os
+import uuid
 from pathlib import Path
 from typing import List, Optional
 
@@ -23,6 +24,18 @@ from app.state import PRValidationState, UploadedFile
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="PR Attachment Validation Agent", version="1.0.0")
+
+
+@app.on_event("startup")
+async def on_startup():
+    """Seed Langfuse prompts on startup if SEED_PROMPTS=true is set."""
+    if os.environ.get("SEED_PROMPTS", "").lower() == "true":
+        try:
+            from app.services.langfuse_service import seed_prompts
+            seed_prompts()
+        except Exception as exc:
+            logger.warning(f"seed_prompts failed: {exc}")
+
 
 # Serve static files
 STATIC_DIR = Path(__file__).parent.parent / "static"
@@ -56,6 +69,7 @@ async def validate(
     pr_number: str = Form(...),
     item_long_text: str = Form(""),
     pr_description: str = Form(""),
+    submitted_by: str = Form(""),
     files: Optional[List[UploadFile]] = File(default=None),
     doc_types: Optional[List[str]] = Form(default=None),
 ):
@@ -101,6 +115,7 @@ async def validate(
     }
 
     # Build run config — attach Langfuse if configured
+    trace_id = str(uuid.uuid4())
     run_config = {
         "run_name": f"pr-validation-{pr_number}",
         "metadata": {"pr_type": pr_type, "env": settings.app_env},
@@ -117,6 +132,9 @@ async def validate(
                 public_key=settings.langfuse_public_key,
                 secret_key=settings.langfuse_secret_key,
                 host=settings.langfuse_host,
+                trace_id=trace_id,
+                user_id=submitted_by or None,
+                session_id=f"pr-{pr_number}",
             )
             run_config["callbacks"] = [langfuse_handler]
         except Exception as exc:
@@ -146,6 +164,27 @@ async def validate(
     messages = result_state.get("validation_messages", [])
     blocker_count = result_state.get("blocker_count", 0)
     overall_status = result_state.get("overall_status", "ready")
+
+    # Post-run scoring — record validation outcome as Langfuse scores
+    if settings.langfuse_enabled:
+        try:
+            from app.services.langfuse_service import get_langfuse_client
+            lf = get_langfuse_client()
+            if lf:
+                lf.score(
+                    trace_id=trace_id,
+                    name="validation_result",
+                    value=1.0 if blocker_count == 0 else 0.0,
+                    comment="ready" if blocker_count == 0 else f"{blocker_count} blocker(s) found",
+                )
+                lf.score(
+                    trace_id=trace_id,
+                    name="blocker_count",
+                    value=float(blocker_count),
+                )
+                lf.flush()
+        except Exception as exc:
+            logger.warning(f"Failed to record Langfuse scores: {exc}")
 
     return {
         "messages": messages,

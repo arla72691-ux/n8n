@@ -70,7 +70,7 @@ def parse_json_response(text: str) -> dict:
 # ---------------------------------------------------------------------------
 
 def build_apd_drawing_prompt(drawing_number: str, revision: str) -> str:
-    return f"""You are validating an engineering drawing attached to a Purchase Requisition.
+    fallback = f"""You are validating an engineering drawing attached to a Purchase Requisition.
 Drawing number expected: {drawing_number}
 Revision expected: {revision} (treat 0, 00, and "NO REVISION" as equivalent base revisions)
 
@@ -88,10 +88,13 @@ Criteria:
 - revision_match: Is the revision {revision} (or equivalent) visible on the title block?
 - approval_stamp: Is there an approval stamp, signature, or authorising engineer name on the title block?
 - legible: Is the drawing legible — not heavily blurred, cropped, or illegible?"""
+    from app.services.langfuse_service import get_prompt, PROMPT_APD_DRAWING
+    return get_prompt(PROMPT_APD_DRAWING, fallback=fallback,
+                      drawing_number=drawing_number, revision=revision)
 
 
 def build_ftp_costing_sheet_prompt() -> str:
-    return """You are validating a First Time Purchase (FTP) costing sheet attached to a Purchase Requisition.
+    fallback = """You are validating a First Time Purchase (FTP) costing sheet attached to a Purchase Requisition.
 
 Examine the document carefully and respond ONLY with a JSON object in exactly this format:
 {
@@ -107,6 +110,8 @@ Criteria:
 - cost_breakdown_present: Does the document contain a cost breakdown with material, processing, overhead, and total unit cost?
 - validity_date_present: Is there a validity or effective date visible?
 - authorising_signature: Is there an authorising signature or approver name visible?"""
+    from app.services.langfuse_service import get_prompt, PROMPT_FTP_COSTING
+    return get_prompt(PROMPT_FTP_COSTING, fallback=fallback)
 
 
 def build_pac_cert_prompt(pr_description: str = "") -> str:
@@ -120,7 +125,7 @@ def build_pac_cert_prompt(pr_description: str = "") -> str:
         if pr_description
         else '"scope_match": "NOT_CHECKED",'
     )
-    return f"""You are validating a PAC (Pre-Approved Certificate / Preferred Approved Contractor) certificate attached to a Purchase Requisition.
+    fallback = f"""You are validating a PAC (Pre-Approved Certificate / Preferred Approved Contractor) certificate attached to a Purchase Requisition.
 
 Examine the document carefully and respond ONLY with a JSON object in exactly this format:
 {{
@@ -138,10 +143,12 @@ Criteria:
 - vendor_name: Is a vendor or company name visible?
 - expiry_date_present: Is a validity or expiry date present on the document?
 - authorising_signature: Is there an authorising signature or approver name?{scope_check}"""
+    from app.services.langfuse_service import get_prompt, PROMPT_PAC_CERT
+    return get_prompt(PROMPT_PAC_CERT, fallback=fallback, pr_description=pr_description)
 
 
 def build_scope_of_work_prompt() -> str:
-    return """You are validating a Scope of Work document attached to a Service Purchase Requisition.
+    fallback = """You are validating a Scope of Work document attached to a Service Purchase Requisition.
 
 Examine the document carefully and respond ONLY with a JSON object in exactly this format:
 {
@@ -157,10 +164,12 @@ Criteria:
 - deliverables_present: Does the document contain identifiable deliverables or work outputs?
 - timeline_present: Is there a timeline, duration, or schedule mentioned?
 - acceptance_criteria_present: Are there acceptance criteria or sign-off conditions mentioned?"""
+    from app.services.langfuse_service import get_prompt, PROMPT_SCOPE_OF_WORK
+    return get_prompt(PROMPT_SCOPE_OF_WORK, fallback=fallback)
 
 
 def build_jsa_prompt() -> str:
-    return """You are validating a Job Safety Analysis (JSA) document attached to a Service Purchase Requisition.
+    fallback = """You are validating a Job Safety Analysis (JSA) document attached to a Service Purchase Requisition.
 
 Examine the document carefully and respond ONLY with a JSON object in exactly this format:
 {
@@ -176,10 +185,12 @@ Criteria:
 - hazards_identified: Does the JSA identify specific hazards associated with the work?
 - control_measures_present: Are control measures or mitigations listed for the identified hazards?
 - safety_officer_signature: Is there a safety officer, HSE authority, or supervisor signature visible?"""
+    from app.services.langfuse_service import get_prompt, PROMPT_JSA
+    return get_prompt(PROMPT_JSA, fallback=fallback)
 
 
 def build_technical_skillset_prompt() -> str:
-    return """You are validating a Technical Skill-Set document attached to a Service Purchase Requisition.
+    fallback = """You are validating a Technical Skill-Set document attached to a Service Purchase Requisition.
 
 Examine the document carefully and respond ONLY with a JSON object in exactly this format:
 {
@@ -193,3 +204,5 @@ Examine the document carefully and respond ONLY with a JSON object in exactly th
 Criteria:
 - qualifications_listed: Does the document list required qualifications for the roles involved?
 - certifications_listed: Does the document specify required certifications or licences for the roles?"""
+    from app.services.langfuse_service import get_prompt, PROMPT_TECHNICAL_SKILLSET
+    return get_prompt(PROMPT_TECHNICAL_SKILLSET, fallback=fallback)
