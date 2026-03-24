@@ -9,4 +9,5 @@ build/
 venv/
 *.pem
 *.json
+!langgraph.json
 !.env.example
