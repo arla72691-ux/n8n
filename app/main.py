@@ -117,27 +117,23 @@ async def validate(
     # Build run config — attach Langfuse if configured
     trace_id = str(uuid.uuid4())
     logger.info("Langfuse trace starting | trace_id=%s run_name=pr-validation-%s", trace_id, pr_number)
-    run_config = {
-        "run_name": f"pr-validation-{pr_number}",
-        "metadata": {"pr_type": pr_type, "env": settings.app_env},
-    }
+    run_config: dict = {}
 
     langfuse_handler = None
     if settings.langfuse_enabled:
         try:
-            import logging as _logging
-            # Suppress noisy Langfuse SDK warnings (e.g. proxy/SSL connectivity errors)
-            _logging.getLogger("langfuse").setLevel(_logging.ERROR)
-            from langfuse.callback import CallbackHandler
-            langfuse_handler = CallbackHandler(
-                public_key=settings.langfuse_public_key,
-                secret_key=settings.langfuse_secret_key,
-                host=settings.langfuse_host,
-                trace_id=trace_id,
-                user_id=submitted_by or None,
-                session_id=f"pr-{pr_number}",
-            )
-            run_config["callbacks"] = [langfuse_handler]
+            from app.services.langfuse_service import get_langfuse_client
+            lf_client = get_langfuse_client()
+            if lf_client:
+                lf_trace = lf_client.trace(
+                    id=trace_id,
+                    name=f"pr-validation-{pr_number}",
+                    user_id=submitted_by or None,
+                    session_id=f"pr-{pr_number}",
+                    metadata={"pr_type": pr_type, "env": settings.app_env},
+                )
+                langfuse_handler = lf_trace.get_langchain_handler()
+                run_config["callbacks"] = [langfuse_handler]
         except Exception as exc:
             logger.warning(f"Failed to initialise Langfuse: {exc}")
 
