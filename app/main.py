@@ -28,13 +28,12 @@ app = FastAPI(title="PR Attachment Validation Agent", version="1.0.0")
 
 @app.on_event("startup")
 async def on_startup():
-    """Seed Langfuse prompts on startup if SEED_PROMPTS=true is set."""
-    if os.environ.get("SEED_PROMPTS", "").lower() == "true":
-        try:
-            from app.services.langfuse_service import seed_prompts
-            seed_prompts()
-        except Exception as exc:
-            logger.warning(f"seed_prompts failed: {exc}")
+    """Seed Langfuse prompts on startup (idempotent — skips already-existing prompts)."""
+    try:
+        from app.services.langfuse_service import seed_prompts
+        seed_prompts()
+    except Exception as exc:
+        logger.warning(f"seed_prompts failed: {exc}")
 
 
 # Serve static files

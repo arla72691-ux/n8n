@@ -79,7 +79,7 @@ def seed_prompts():
             logger.info(f"seed_prompts: prompt '{name}' already exists, skipping.")
         except Exception:
             try:
-                client.create_prompt(name=name, prompt=template, labels=["production"])
+                client.create_prompt(name=name, prompt=template, labels=["production"], type="text")
                 logger.info(f"seed_prompts: created prompt '{name}'.")
             except Exception as exc:
                 logger.warning(f"seed_prompts: failed to create '{name}': {exc}")
