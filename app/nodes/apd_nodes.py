@@ -108,10 +108,12 @@ def validate_documents(state: PRValidationState) -> dict:
         if drive_error:
             messages.append(_msg("⚠", f"Drawing {drawing_number}: Drive search encountered an error ({drive_error}). Checking for attachment."))
 
+        trace_id = state.get("trace_id", "")
+
         if drive_file:
             # Drawing found in Drive
             if settings.gemini_enabled:
-                result = _gemini_validate_drawing(drive_bytes, drive_file.mime_type or "application/pdf", drawing_number, rev)
+                result = _gemini_validate_drawing(drive_bytes, drive_file.mime_type or "application/pdf", drawing_number, rev, trace_id)
                 messages.extend(result["messages"])
                 blocker_count += result["blockers"]
             else:
@@ -129,7 +131,7 @@ def validate_documents(state: PRValidationState) -> dict:
             else:
                 messages.append(_msg("⚠", f"Drawing {drawing_number} not found in system. Validating attached file '{uploaded['name']}'."))
                 if settings.gemini_enabled:
-                    result = _gemini_validate_drawing(uploaded["content"], uploaded["mime_type"], drawing_number, rev)
+                    result = _gemini_validate_drawing(uploaded["content"], uploaded["mime_type"], drawing_number, rev, trace_id)
                     messages.extend(result["messages"])
                     blocker_count += result["blockers"]
                 else:
@@ -142,12 +144,14 @@ def validate_documents(state: PRValidationState) -> dict:
 
 
 def _gemini_validate_drawing(
-    file_bytes: bytes, mime_type: str, drawing_number: str, revision: str
+    file_bytes: bytes, mime_type: str, drawing_number: str, revision: str,
+    trace_id: str = "",
 ) -> dict:
     from app.services import gemini_service
 
-    prompt = gemini_service.build_apd_drawing_prompt(drawing_number, revision)
-    raw = gemini_service.validate_document(file_bytes, mime_type, prompt)
+    prompt, lf_prompt = gemini_service.build_apd_drawing_prompt(drawing_number, revision)
+    raw = gemini_service.validate_document(file_bytes, mime_type, prompt,
+                                           langfuse_prompt=lf_prompt, trace_id=trace_id)
 
     try:
         result = gemini_service.parse_json_response(raw)

@@ -50,20 +50,23 @@ def handle(state: PRValidationState) -> dict:
 
     doc_results: dict = {}
 
+    trace_id = state.get("trace_id", "")
+
     # Validate each document
     for doc_type, label in _REQUIRED_DOCS.items():
         f = doc_map[doc_type]
         messages.append({"icon": "✓", "text": f"Validating '{label}': '{f['name']}'."})
 
         if doc_type == "scope_of_work":
-            prompt = gemini_service.build_scope_of_work_prompt()
+            prompt, lf_prompt = gemini_service.build_scope_of_work_prompt()
         elif doc_type == "jsa":
-            prompt = gemini_service.build_jsa_prompt()
+            prompt, lf_prompt = gemini_service.build_jsa_prompt()
         else:
-            prompt = gemini_service.build_technical_skillset_prompt()
+            prompt, lf_prompt = gemini_service.build_technical_skillset_prompt()
 
         try:
-            raw = gemini_service.validate_document(f["content"], f["mime_type"], prompt)
+            raw = gemini_service.validate_document(f["content"], f["mime_type"], prompt,
+                                                   langfuse_prompt=lf_prompt, trace_id=trace_id)
             result = gemini_service.parse_json_response(raw)
             doc_results[doc_type] = result
         except Exception as exc:

@@ -57,6 +57,23 @@ def get_prompt(name: str, fallback: str, **variables) -> str:
         return fallback
 
 
+def get_prompt_and_client(name: str, fallback: str, **variables):
+    """
+    Like get_prompt(), but also returns the raw PromptClient object so callers
+    can pass it to a Langfuse generation for observation tracking.
+
+    Returns: (compiled_str, PromptClient | None)
+    """
+    client = get_langfuse_client()
+    if client is None:
+        return fallback, None
+    try:
+        prompt_obj = client.get_prompt(name)
+        return prompt_obj.compile(**variables), prompt_obj
+    except Exception:
+        return fallback, None
+
+
 def seed_prompts():
     """
     Push all hardcoded prompts into Langfuse Prompt Management (idempotent — creates if absent).

@@ -25,3 +25,4 @@ class PRValidationState(TypedDict):
     validation_messages: List[ValidationMessage]
     blocker_count: int
     overall_status: str            # "ready" or "blockers"
+    trace_id: str                  # Langfuse trace ID, threaded through for generation linking

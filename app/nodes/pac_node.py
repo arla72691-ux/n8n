@@ -45,8 +45,9 @@ def handle(state: PRValidationState) -> dict:
 
     from app.services import gemini_service
 
-    prompt = gemini_service.build_pac_cert_prompt(pr_description)
-    raw = gemini_service.validate_document(pac_file["content"], pac_file["mime_type"], prompt)
+    prompt, lf_prompt = gemini_service.build_pac_cert_prompt(pr_description)
+    raw = gemini_service.validate_document(pac_file["content"], pac_file["mime_type"], prompt,
+                                           langfuse_prompt=lf_prompt, trace_id=state.get("trace_id", ""))
 
     try:
         result = gemini_service.parse_json_response(raw)

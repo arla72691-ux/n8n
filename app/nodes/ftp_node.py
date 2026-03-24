@@ -42,8 +42,9 @@ def handle(state: PRValidationState) -> dict:
 
     from app.services import gemini_service
 
-    prompt = gemini_service.build_ftp_costing_sheet_prompt()
-    raw = gemini_service.validate_document(costing_file["content"], costing_file["mime_type"], prompt)
+    prompt, lf_prompt = gemini_service.build_ftp_costing_sheet_prompt()
+    raw = gemini_service.validate_document(costing_file["content"], costing_file["mime_type"], prompt,
+                                           langfuse_prompt=lf_prompt, trace_id=state.get("trace_id", ""))
 
     try:
         result = gemini_service.parse_json_response(raw)

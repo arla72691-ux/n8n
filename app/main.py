@@ -111,6 +111,7 @@ async def validate(
         "validation_messages": [],
         "blocker_count": 0,
         "overall_status": "ready",
+        "trace_id": trace_id,
     }
 
     # Build run config — attach Langfuse if configured
