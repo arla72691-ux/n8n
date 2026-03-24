@@ -99,6 +99,9 @@ async def validate(
                     "doc_type": doc_type,
                 })
 
+    # Build run config — attach Langfuse if configured
+    trace_id = str(uuid.uuid4())
+
     # Build initial LangGraph state
     initial_state: PRValidationState = {
         "pr_type": pr_type,
@@ -113,9 +116,6 @@ async def validate(
         "overall_status": "ready",
         "trace_id": trace_id,
     }
-
-    # Build run config — attach Langfuse if configured
-    trace_id = str(uuid.uuid4())
     logger.info("Langfuse trace starting | trace_id=%s run_name=pr-validation-%s", trace_id, pr_number)
     run_config: dict = {}
 
