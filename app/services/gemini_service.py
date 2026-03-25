@@ -4,15 +4,22 @@ Gemini service for multimodal document validation.
 Uses the google-genai SDK (google.genai) with Gemini 2.5 Pro.
 Files are passed as inline base64 data so no server-side file upload is needed.
 """
-import base64
 import json
+import logging
 import re
+import time
 from functools import lru_cache
 
 from google import genai
 from google.genai import types
+from google.api_core.exceptions import ResourceExhausted, ServiceUnavailable, InternalServerError
 
 from app.config import get_settings
+
+logger = logging.getLogger(__name__)
+
+_RETRYABLE = (ResourceExhausted, ServiceUnavailable, InternalServerError)
+_RETRY_DELAYS = (2, 4, 8)  # seconds between attempts 1→2, 2→3, 3→4
 
 
 @lru_cache(maxsize=1)
@@ -29,8 +36,10 @@ def validate_document(
     trace_id: str = "",
 ) -> str:
     """
-    Send a file (as inline base64) and a text prompt to Gemini 1.5 Pro.
+    Send a file (as inline base64) and a text prompt to Gemini.
     Returns the raw text response.
+
+    Retries up to 3 times with exponential backoff on transient 503/429/500 errors.
 
     If `langfuse_prompt` (a PromptClient) and `trace_id` are supplied, a
     Langfuse generation observation is recorded and linked to the prompt
@@ -38,17 +47,32 @@ def validate_document(
     """
     client = get_gemini_client()
 
-    response = client.models.generate_content(
-        model="gemini-2.5-flash",
-        contents=[
-            types.Part.from_bytes(data=file_bytes, mime_type=mime_type),
-            prompt,
-        ],
-        config=types.GenerateContentConfig(
-            response_mime_type="application/json",
-        ),
-    )
-    response_text = response.text
+    last_exc = None
+    for attempt, delay in enumerate((*_RETRY_DELAYS, None), start=1):
+        try:
+            response = client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=[
+                    types.Part.from_bytes(data=file_bytes, mime_type=mime_type),
+                    prompt,
+                ],
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                ),
+            )
+            response_text = response.text
+            break
+        except _RETRYABLE as exc:
+            last_exc = exc
+            if delay is None:
+                raise
+            logger.warning(
+                "Gemini transient error (attempt %d/4): %s — retrying in %ds",
+                attempt, exc, delay,
+            )
+            time.sleep(delay)
+    else:
+        raise last_exc  # should never reach here but satisfies linters
 
     if langfuse_prompt and trace_id:
         try:
