@@ -76,30 +76,28 @@ def get_prompt_and_client(name: str, fallback: str, **variables):
 
 def seed_prompts():
     """
-    Push all hardcoded prompts into Langfuse Prompt Management (idempotent — creates if absent).
-    Call this once to populate the Langfuse UI so prompts can be edited there.
+    Push all hardcoded prompts into Langfuse Prompt Management.
+    Always creates a new version so that code-side changes take effect on Render
+    without manual Langfuse UI edits.  Langfuse retains full version history.
 
-    Controlled by the SEED_PROMPTS environment variable:
-        SEED_PROMPTS=true uvicorn app.main:app ...
+    Called on every startup via app.main:on_startup.
     """
     client = get_langfuse_client()
     if client is None:
         logger.warning("seed_prompts: Langfuse not configured, skipping.")
         return
 
-    # Import hardcoded templates (converted to {{var}} syntax for Langfuse)
     prompts = _get_prompt_templates()
     for name, template in prompts.items():
         try:
-            # get_prompt will raise NotFoundError if absent; create it then
-            client.get_prompt(name)
-            logger.info(f"seed_prompts: prompt '{name}' already exists, skipping.")
-        except Exception:
-            try:
-                client.create_prompt(name=name, prompt=template, labels=["production"], type="text")
-                logger.info(f"seed_prompts: created prompt '{name}'.")
-            except Exception as exc:
-                logger.warning(f"seed_prompts: failed to create '{name}': {exc}")
+            # Always create a new version tagged "production".
+            # If the prompt didn't exist, this creates version 1.
+            # If it already existed, this creates the next version and moves
+            # the "production" label — ensuring Gemini always uses the latest template.
+            client.create_prompt(name=name, prompt=template, labels=["production"], type="text")
+            logger.info(f"seed_prompts: pushed new version of '{name}'.")
+        except Exception as exc:
+            logger.warning(f"seed_prompts: failed to push '{name}': {exc}")
 
 
 def _get_prompt_templates() -> dict:
@@ -115,35 +113,41 @@ def _get_prompt_templates() -> dict:
             "- Revision: {{revision}} (treat 0, 00, and \"NO REVISION\" as equivalent base revisions)\n"
             "- Position/item number(s) to verify: {{part_numbers}}\n\n"
             "─── ENGINEERING DRAWING LAYOUT — WHERE TO LOOK ────────────────────────────────\n\n"
-            "PARTS LIST / SCHEDULE TABLE — it can appear in ANY of these locations:\n\n"
-            "  1. FULL-HEIGHT VERTICAL STRIP on the RIGHT SIDE of the sheet (IEC/ISO/DIN/European\n"
-            "     standard, very common in Latin America and Europe). The table runs as a column\n"
-            "     along the right edge, from near the top of the sheet down to just above the title\n"
-            "     block. This is a TALL NARROW TABLE on the right margin.\n\n"
-            "  2. HORIZONTAL BLOCK in the LOWER RIGHT corner, directly above the title block\n"
-            "     (ASME/ANSI/BS standard, common in North America and UK).\n\n"
-            "  3. UPPER RIGHT corner as a stacked horizontal block.\n\n"
-            "  In ALL cases the table typically reads BOTTOM TO TOP: item 1 is the BOTTOM row,\n"
-            "  higher item numbers are in the rows above it.\n\n"
-            "TABLE IDENTIFICATION — it is a bordered grid and its header row may be labelled:\n"
-            "  English:  \"PARTS LIST\", \"BILL OF MATERIALS\", \"BOM\", \"SCHEDULE\", \"MATERIAL LIST\",\n"
-            "            \"COMPONENT LIST\", \"ASSEMBLY LIST\", \"ITEM LIST\"\n"
-            "  Spanish:  \"LISTA DE MATERIALES\", \"LISTA DE PARTES\", \"LISTA DE COMPONENTES\",\n"
-            "            \"MATERIALES\", \"DESPIECE\", \"NOMENCLATURA\", \"DESCRIPCION\"\n\n"
-            "The item-number column header may read:\n"
-            "  English:  \"ITEM\", \"ITEM NO.\", \"NO.\", \"POS.\", \"FIND NO.\"\n"
-            "  Spanish:  \"ITEM\", \"POSICION\", \"POS.\", \"Nº\", \"No.\"\n"
-            "  Or it may be an unlabelled leftmost column of sequential numbers.\n\n"
-            "BALLOON CALLOUTS (secondary source):\n"
-            "  Circled, hexagonal, or flag-shaped numbers on the drawing view itself that point\n"
-            "  to individual components — these match the item number column in the parts list.\n\n"
-            "TITLE BLOCK: lower right corner — drawing number, revision, date, approvals.\n"
-            "REVISION TABLE: upper right corner — revision history.\n\n"
-            "─── NORMALISATION RULES ────────────────────────────────────────────────────────\n"
-            "• \"P3\" in the PR == \"3\" in the table; \"01\" == \"1\".\n\n"
+            "This drawing likely contains a PARTS LIST / SCHEDULE / BOM TABLE. Look for it in:\n\n"
+            "  1. RIGHT SIDE OF SHEET — a table in the right portion, either:\n"
+            "     • A full-height vertical strip running along the right edge (IEC/ISO/DIN —\n"
+            "       very common in Latin America, Europe), OR\n"
+            "     • A mid-sheet table block on the right half of the drawing\n\n"
+            "  2. LOWER RIGHT CORNER — a horizontal block directly above the title block\n"
+            "     (ASME/ANSI/BS — common in North America)\n\n"
+            "  3. UPPER RIGHT CORNER — stacked horizontal block\n\n"
+            "The table reads BOTTOM TO TOP: item 1 is at the BOTTOM, higher numbers are above it.\n\n"
+            "HOW TO IDENTIFY THE TABLE — look for ANY bordered grid with:\n"
+            "  • A column of sequential numbers: 1, 2, 3 … (or 01, 02 …) on the left\n"
+            "  • Columns for quantity and/or description to the right of the number column\n"
+            "  • A header row labelled (English OR Spanish):\n"
+            "    \"PARTS LIST\" / \"LISTA DE MATERIALES\" / \"LISTA DE PARTES\" / \"BOM\" / \"SCHEDULE\" /\n"
+            "    \"BILL OF MATERIALS\" / \"MATERIAL LIST\" / \"DESPIECE\" / \"NOMENCLATURA\"\n"
+            "  • Column headers: \"ITEM\"/\"POS.\"/\"POSICION\"/\"Nº\"/\"No.\" | \"QTY\"/\"CANT.\" | \"DESCRIPTION\"/\"DESCRIPCION\"\n"
+            "  • The first/leftmost column may be UNLABELLED and just contain the sequential numbers\n\n"
+            "BALLOON CALLOUTS (secondary): circled or enclosed numbers scattered on the drawing\n"
+            "  view pointing to components — these match the item numbers in the parts list.\n\n"
+            "TITLE BLOCK: lower right — drawing number, revision, date.\n"
+            "REVISION BLOCK: upper right — revision history (separate from parts list).\n\n"
+            "─── NORMALISATION ──────────────────────────────────────────────────────────────\n"
+            "• \"P3\" in the PR == \"3\" in the table. \"01\" == \"1\". Strip leading zeros and \"P\" prefix.\n\n"
+            "─── IMPORTANT: WHEN TO USE EACH STATUS ────────────────────────────────────────\n"
+            "PASS      — You can clearly read the table and ALL required position numbers are present.\n"
+            "FAIL      — You can read the table and one or more required numbers are MISSING.\n"
+            "UNCLEAR   — You can SEE what looks like a table, numbered column, or circled numbers\n"
+            "            BUT the text/numbers are too small, blurry, or compressed to read reliably.\n"
+            "            USE THIS if the image quality prevents confident reading.\n"
+            "NOT_CHECKED — Use ONLY when the drawing is a single-component detail drawing with\n"
+            "            genuinely NO table, NO numbered grid, and NO circled balloon numbers\n"
+            "            ANYWHERE on the sheet. This is rare. If you see ANY grid or ANY circled\n"
+            "            numbers, use UNCLEAR instead of NOT_CHECKED.\n\n"
             "────────────────────────────────────────────────────────────────────────────────\n\n"
-            "Scan the ENTIRE sheet — pay special attention to the RIGHT EDGE (full-height strip)\n"
-            "and the LOWER RIGHT CORNER — then respond ONLY with a JSON object in exactly this format:\n"
+            "Scan the ENTIRE sheet. Then respond ONLY with a JSON object in exactly this format:\n"
             "{\n"
             "  \"has_drawings\": \"PASS\" | \"FAIL\",\n"
             "  \"drawing_number_match\": \"PASS\" | \"FAIL\" | \"UNCLEAR\",\n"
@@ -151,21 +155,14 @@ def _get_prompt_templates() -> dict:
             "  \"position_number_match\": \"PASS\" | \"FAIL\" | \"UNCLEAR\" | \"NOT_CHECKED\",\n"
             "  \"found_drawing_number\": \"<drawing number found on document, or null>\",\n"
             "  \"found_revision\": \"<revision found on document, or null>\",\n"
-            "  \"found_position_numbers\": \"<ALL item/position numbers you can read from the parts list or balloon callouts, or null>\",\n"
-            "  \"notes\": \"<brief explanation of any issues, or empty string>\"\n"
+            "  \"found_position_numbers\": \"<ALL item/position numbers you can read, or null>\",\n"
+            "  \"notes\": \"<brief explanation>\"\n"
             "}\n\n"
             "Criteria:\n"
-            "- has_drawings: Are actual engineering drawings present? FAIL if pages are blank or contain no geometry.\n"
-            "- drawing_number_match: Does the drawing number in the title block match {{drawing_number}}?\n"
-            "- revision_match: Does the revision in the title block or revision table match {{revision}} (treat 0, 00, NO REVISION as equivalent)?\n"
-            "- position_number_match:\n"
-            "    Check the right-side vertical strip AND the lower-right block AND any balloon callouts.\n"
-            "    Does the item-number column contain ALL of: {{part_numbers}}?\n"
-            "    PASS   — every required position number is found.\n"
-            "    FAIL   — one or more are missing (report what you did find in found_position_numbers).\n"
-            "    UNCLEAR — a table or balloon exists but is too blurry/small to read individual entries.\n"
-            "    NOT_CHECKED — ONLY when there is genuinely no bordered table and no balloon callouts\n"
-            "    anywhere on the entire sheet. DO NOT use if any numbered table or circled numbers exist."
+            "- has_drawings: Real engineering geometry present? FAIL if completely blank.\n"
+            "- drawing_number_match: Title block drawing number == {{drawing_number}}?\n"
+            "- revision_match: Revision in title block or revision table == {{revision}}?\n"
+            "- position_number_match: Using the rules above, do ALL of [{{part_numbers}}] appear?"
         ),
         PROMPT_FTP_COSTING: (
             "You are validating a First Time Purchase (FTP) costing sheet attached to a Purchase Requisition.\n\n"
