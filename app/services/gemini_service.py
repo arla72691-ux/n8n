@@ -126,32 +126,51 @@ Expected values from the Purchase Requisition item long text:
 - Revision: {revision} (treat 0, 00, and "NO REVISION" as equivalent base revisions)
 - Position/item number(s) to verify: {part_numbers_str}
 
-─── STANDARD ENGINEERING DRAWING LAYOUT — WHERE TO LOOK ───────────────────────
+─── ENGINEERING DRAWING LAYOUT — WHERE TO LOOK ────────────────────────────────
 
-PARTS LIST / SCHEDULE TABLE (primary source for position numbers):
-  • Location: LOWER RIGHT corner of the sheet, directly above the title block.
-    In some standards it appears in the UPPER RIGHT corner instead.
-  • Reading direction: the table reads BOTTOM TO TOP — item 1 is the BOTTOM row,
-    higher item numbers are in the rows above it.
-  • The table is bordered and may be labelled: "PARTS LIST", "BILL OF MATERIALS",
-    "BOM", "SCHEDULE", "MATERIAL LIST", "COMPONENT LIST", or "ASSEMBLY LIST".
-  • Typical columns: ITEM NO. (or POS. / FIND NO. / NO.) | QTY | DESCRIPTION | PART NO. | MATERIAL
+PARTS LIST / SCHEDULE TABLE — it can appear in ANY of these locations:
+
+  1. FULL-HEIGHT VERTICAL STRIP on the RIGHT SIDE of the sheet (IEC/ISO/DIN/European
+     standard, very common in Latin America and Europe). The table runs as a column
+     along the right edge, from near the top of the sheet down to just above the title
+     block. This is a TALL NARROW TABLE on the right margin.
+
+  2. HORIZONTAL BLOCK in the LOWER RIGHT corner, directly above the title block
+     (ASME/ANSI/BS standard, common in North America and UK).
+
+  3. UPPER RIGHT corner as a stacked horizontal block.
+
+  In ALL cases the table typically reads BOTTOM TO TOP: item 1 is the BOTTOM row,
+  higher item numbers are in the rows above it.
+
+TABLE IDENTIFICATION — it is a bordered grid and its header row may be labelled:
+  English:  "PARTS LIST", "BILL OF MATERIALS", "BOM", "SCHEDULE", "MATERIAL LIST",
+            "COMPONENT LIST", "ASSEMBLY LIST", "ITEM LIST"
+  Spanish:  "LISTA DE MATERIALES", "LISTA DE PARTES", "LISTA DE COMPONENTES",
+            "MATERIALES", "DESPIECE", "NOMENCLATURA", "DESCRIPCION"
+
+The item-number column header may read:
+  English:  "ITEM", "ITEM NO.", "ITEM NO", "NO.", "POS.", "FIND NO."
+  Spanish:  "ITEM", "POSICION", "POS.", "Nº", "No.", "CANT." (sometimes)
+  Or it may simply be an unlabelled leftmost column of sequential numbers.
 
 BALLOON CALLOUTS (secondary source):
-  • Circled, hexagonal, or flag-shaped numbers on the drawing view itself that
-    point to individual components — these numbers match the ITEM NO. column.
+  Circled, hexagonal, or flag-shaped numbers on the drawing view itself that point
+  to individual components — these match the item number column in the parts list.
 
-TITLE BLOCK: lower right corner — contains drawing number, revision, date, drawn-by.
-REVISION TABLE: upper right corner — lists revision history letters/numbers.
+TITLE BLOCK: lower right corner — drawing number, revision, date, approvals.
+REVISION TABLE / REVISION BLOCK: upper right corner — revision history.
 
-─── NORMALISATION RULE ─────────────────────────────────────────────────────────
-Position numbers in the PR may carry a "P" prefix (e.g. "P3") while the drawing
-table shows plain numbers (e.g. "3"). Treat these as equivalent when matching.
+─── NORMALISATION RULES ────────────────────────────────────────────────────────
+• Position numbers in the PR may carry a "P" prefix (e.g. "P3") while the drawing
+  table shows plain numbers (e.g. "3"). Treat these as equivalent.
+• Numbers may be zero-padded (e.g. "01" matches "1").
 
 ────────────────────────────────────────────────────────────────────────────────
 
-Examine every corner of the sheet carefully, then respond ONLY with a JSON object
-in exactly this format:
+Scan the ENTIRE sheet — pay special attention to the RIGHT EDGE (full-height strip)
+and the LOWER RIGHT CORNER (block above title block) — then respond ONLY with a
+JSON object in exactly this format:
 {{
   "has_drawings": "PASS" | "FAIL",
   "drawing_number_match": "PASS" | "FAIL" | "UNCLEAR",
@@ -159,23 +178,24 @@ in exactly this format:
   "position_number_match": "PASS" | "FAIL" | "UNCLEAR" | "NOT_CHECKED",
   "found_drawing_number": "<drawing number found on document, or null>",
   "found_revision": "<revision found on document, or null>",
-  "found_position_numbers": "<ALL item/position/find numbers you can read from the parts list or balloon callouts, or null>",
+  "found_position_numbers": "<ALL item/position numbers you can read from the parts list or balloon callouts, or null>",
   "notes": "<brief explanation of any issues, or empty string>"
 }}
 
 Criteria:
-- has_drawings: Are actual engineering drawings present? FAIL if pages are blank or contain no drawing geometry.
-- drawing_number_match: Does the drawing number in the title block (lower right) match {drawing_number}?
+- has_drawings: Are actual engineering drawings present? FAIL if pages are blank or contain no geometry.
+- drawing_number_match: Does the drawing number in the title block match {drawing_number}?
 - revision_match: Does the revision in the title block or revision table match {revision} (treat 0, 00, NO REVISION as equivalent)?
-- position_number_match: Look in the parts list/schedule table (lower right, above title block) and on balloon callouts.
-  Does the ITEM NO. / POS. column contain ALL of: {part_numbers_str}?
-  Remember: "P3" in the PR matches "3" in the drawing table.
-  PASS if ALL required position numbers are found.
-  FAIL if any are missing (list what you did find in found_position_numbers).
-  UNCLEAR if a table is visible but too small or blurry to read clearly.
-  NOT_CHECKED ONLY if there is genuinely NO parts list, schedule table, or balloon callouts
-  anywhere on the sheet (e.g. a single-component detail drawing). Do NOT use NOT_CHECKED
-  if any table or balloon numbers are visible."""
+- position_number_match:
+    Check the right-side vertical strip AND the lower-right block AND any balloon callouts.
+    Does the item-number column contain ALL of: {part_numbers_str}?
+    "P3" in the PR == "3" in the table; "01" == "1".
+    PASS   — every required position number is found somewhere on the sheet.
+    FAIL   — one or more are missing (report what you did find in found_position_numbers).
+    UNCLEAR — a table or balloon exists but is too blurry/small to read individual entries.
+    NOT_CHECKED — use ONLY when there is genuinely no bordered table, no schedule strip, and
+    no balloon callouts anywhere on the entire sheet. DO NOT use NOT_CHECKED if you can see
+    any numbered table column or any circled numbers, even if you cannot fully read them."""
     from app.services.langfuse_service import get_prompt_and_client, PROMPT_APD_DRAWING
     return get_prompt_and_client(PROMPT_APD_DRAWING, fallback=fallback,
                                  drawing_number=drawing_number, revision=revision,
