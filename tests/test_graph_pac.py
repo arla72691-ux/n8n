@@ -58,7 +58,7 @@ def test_pac_valid_cert_no_blockers():
     """Certificate attached, Gemini returns all PASS, expiry far in future → 0 blockers."""
     mock_s = _mock_settings()
     with patch("app.nodes.pac_node.get_settings", return_value=mock_s), \
-         patch("app.services.gemini_service.build_pac_cert_prompt", return_value="p"), \
+         patch("app.services.gemini_service.build_pac_cert_prompt", return_value=("p", None)), \
          patch("app.services.gemini_service.validate_document", return_value="{}"), \
          patch("app.services.gemini_service.parse_json_response", return_value=_all_pass_gemini_json("2030-01-01")):
         result = graph.invoke(_pac_state([PAC_FILE]))
@@ -77,7 +77,7 @@ def test_pac_expired_cert_is_blocker():
     """Expiry date in the past → _check_expiry returns 'expired' → blocker."""
     mock_s = _mock_settings()
     with patch("app.nodes.pac_node.get_settings", return_value=mock_s), \
-         patch("app.services.gemini_service.build_pac_cert_prompt", return_value="p"), \
+         patch("app.services.gemini_service.build_pac_cert_prompt", return_value=("p", None)), \
          patch("app.services.gemini_service.validate_document", return_value="{}"), \
          patch("app.services.gemini_service.parse_json_response",
                return_value=_all_pass_gemini_json("2020-01-01")):  # clearly expired
@@ -96,7 +96,7 @@ def test_pac_cert_expiring_soon_is_warning_not_blocker():
     """_check_expiry mocked to return 'soon' → ⚠ warning added, blocker_count stays 0."""
     mock_s = _mock_settings()
     with patch("app.nodes.pac_node.get_settings", return_value=mock_s), \
-         patch("app.services.gemini_service.build_pac_cert_prompt", return_value="p"), \
+         patch("app.services.gemini_service.build_pac_cert_prompt", return_value=("p", None)), \
          patch("app.services.gemini_service.validate_document", return_value="{}"), \
          patch("app.services.gemini_service.parse_json_response",
                return_value=_all_pass_gemini_json("2026-04-01")), \
@@ -127,7 +127,7 @@ def test_pac_missing_expiry_date_is_blocker():
     }
     mock_s = _mock_settings()
     with patch("app.nodes.pac_node.get_settings", return_value=mock_s), \
-         patch("app.services.gemini_service.build_pac_cert_prompt", return_value="p"), \
+         patch("app.services.gemini_service.build_pac_cert_prompt", return_value=("p", None)), \
          patch("app.services.gemini_service.validate_document", return_value="{}"), \
          patch("app.services.gemini_service.parse_json_response", return_value=gemini_json):
         result = graph.invoke(_pac_state([PAC_FILE]))

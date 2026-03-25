@@ -69,9 +69,9 @@ def test_service_all_docs_all_pass():
 
     mock_s = _mock_settings()
     with patch("app.nodes.service_node.get_settings", return_value=mock_s), \
-         patch("app.services.gemini_service.build_scope_of_work_prompt", return_value="p"), \
-         patch("app.services.gemini_service.build_jsa_prompt", return_value="p"), \
-         patch("app.services.gemini_service.build_technical_skillset_prompt", return_value="p"), \
+         patch("app.services.gemini_service.build_scope_of_work_prompt", return_value=("p", None)), \
+         patch("app.services.gemini_service.build_jsa_prompt", return_value=("p", None)), \
+         patch("app.services.gemini_service.build_technical_skillset_prompt", return_value=("p", None)), \
          patch("app.services.gemini_service.validate_document", return_value="{}"), \
          patch("app.services.gemini_service.parse_json_response",
                side_effect=[scope_result, jsa_result, tech_result]):
@@ -112,9 +112,9 @@ def test_service_scope_missing_deliverables_is_blocker():
 
     mock_s = _mock_settings()
     with patch("app.nodes.service_node.get_settings", return_value=mock_s), \
-         patch("app.services.gemini_service.build_scope_of_work_prompt", return_value="p"), \
-         patch("app.services.gemini_service.build_jsa_prompt", return_value="p"), \
-         patch("app.services.gemini_service.build_technical_skillset_prompt", return_value="p"), \
+         patch("app.services.gemini_service.build_scope_of_work_prompt", return_value=("p", None)), \
+         patch("app.services.gemini_service.build_jsa_prompt", return_value=("p", None)), \
+         patch("app.services.gemini_service.build_technical_skillset_prompt", return_value=("p", None)), \
          patch("app.services.gemini_service.validate_document", return_value="{}"), \
          patch("app.services.gemini_service.parse_json_response",
                side_effect=[scope_result, jsa_result, tech_result]):
@@ -154,9 +154,9 @@ def test_service_vendor_name_mismatch_is_warning_not_blocker():
 
     mock_s = _mock_settings()
     with patch("app.nodes.service_node.get_settings", return_value=mock_s), \
-         patch("app.services.gemini_service.build_scope_of_work_prompt", return_value="p"), \
-         patch("app.services.gemini_service.build_jsa_prompt", return_value="p"), \
-         patch("app.services.gemini_service.build_technical_skillset_prompt", return_value="p"), \
+         patch("app.services.gemini_service.build_scope_of_work_prompt", return_value=("p", None)), \
+         patch("app.services.gemini_service.build_jsa_prompt", return_value=("p", None)), \
+         patch("app.services.gemini_service.build_technical_skillset_prompt", return_value=("p", None)), \
          patch("app.services.gemini_service.validate_document", return_value="{}"), \
          patch("app.services.gemini_service.parse_json_response",
                side_effect=[scope_result, jsa_result, tech_result]):

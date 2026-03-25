@@ -93,28 +93,37 @@ def parse_json_response(text: str) -> dict:
 # Prompt templates
 # ---------------------------------------------------------------------------
 
-def build_apd_drawing_prompt(drawing_number: str, revision: str):
-    fallback = f"""You are validating an engineering drawing attached to a Purchase Requisition.
-Drawing number expected: {drawing_number}
-Revision expected: {revision} (treat 0, 00, and "NO REVISION" as equivalent base revisions)
+def build_apd_drawing_prompt(drawing_number: str, revision: str, part_numbers: list = None):
+    part_numbers_str = ", ".join(part_numbers) if part_numbers else "not specified"
+    fallback = f"""You are validating an engineering drawing attached to an APD Purchase Requisition.
 
-Examine the drawing carefully and respond ONLY with a JSON object in exactly this format:
+Expected values from the Purchase Requisition item long text:
+- Drawing number: {drawing_number}
+- Revision: {revision} (treat 0, 00, and "NO REVISION" as equivalent base revisions)
+- Part/Item number(s): {part_numbers_str}
+
+Examine the drawing's title block, revision table, and parts schedule/BOM table carefully.
+Respond ONLY with a JSON object in exactly this format:
 {{
+  "has_drawings": "PASS" | "FAIL",
   "drawing_number_match": "PASS" | "FAIL" | "UNCLEAR",
   "revision_match": "PASS" | "FAIL" | "UNCLEAR",
-  "approval_stamp": "PASS" | "FAIL" | "UNCLEAR",
-  "legible": "PASS" | "FAIL",
+  "part_number_match": "PASS" | "FAIL" | "UNCLEAR" | "NOT_CHECKED",
+  "found_drawing_number": "<drawing number found on document, or null>",
+  "found_revision": "<revision found on document, or null>",
+  "found_part_numbers": "<part/item numbers found in schedule table, or null>",
   "notes": "<brief explanation of any issues, or empty string>"
 }}
 
 Criteria:
-- drawing_number_match: Is the drawing number {drawing_number} clearly visible on the drawing?
-- revision_match: Is the revision {revision} (or equivalent) visible on the title block?
-- approval_stamp: Is there an approval stamp, signature, or authorising engineer name on the title block?
-- legible: Is the drawing legible — not heavily blurred, cropped, or illegible?"""
+- has_drawings: Are actual engineering drawings present? FAIL if pages are blank or contain no drawing geometry/content.
+- drawing_number_match: Does the drawing number in the title block match {drawing_number}?
+- revision_match: Does the revision on the drawing match {revision} (treat 0, 00, NO REVISION as equivalent)?
+- part_number_match: Do the part/item numbers in the drawing's schedule or BOM table include {part_numbers_str}? Use NOT_CHECKED if no schedule/BOM table is visible."""
     from app.services.langfuse_service import get_prompt_and_client, PROMPT_APD_DRAWING
     return get_prompt_and_client(PROMPT_APD_DRAWING, fallback=fallback,
-                                 drawing_number=drawing_number, revision=revision)
+                                 drawing_number=drawing_number, revision=revision,
+                                 part_numbers=part_numbers_str)
 
 
 def build_ftp_costing_sheet_prompt():

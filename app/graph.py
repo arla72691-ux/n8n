@@ -3,7 +3,7 @@ LangGraph StateGraph definition for the PR Attachment Validation Agent.
 
 Graph structure:
   START → route_pr_type → [conditional] →
-    apd:      apd_parse → apd_drive_search → apd_validate_docs → apd_secondary → format_response
+    apd:      apd_parse → apd_validate_docs → apd_secondary → format_response
     non_apd:  non_apd → format_response
     ftp:      ftp_validate → format_response
     pac:      pac_validate → format_response
@@ -24,7 +24,6 @@ def build_graph() -> StateGraph:
     # ── Nodes ──────────────────────────────────────────────────────────────
     builder.add_node("route_pr_type",     router_module.route_pr_type)
     builder.add_node("apd_parse",         apd_nodes.parse_items)
-    builder.add_node("apd_drive_search",  apd_nodes.search_drive)
     builder.add_node("apd_validate_docs", apd_nodes.validate_documents)
     builder.add_node("apd_secondary",     apd_nodes.secondary_validations)
     builder.add_node("non_apd",           non_apd_node.handle)
@@ -50,8 +49,7 @@ def build_graph() -> StateGraph:
     )
 
     # ── APD subflow edges ────────────────────────────────────────────────────
-    builder.add_edge("apd_parse",         "apd_drive_search")
-    builder.add_edge("apd_drive_search",  "apd_validate_docs")
+    builder.add_edge("apd_parse",         "apd_validate_docs")
     builder.add_edge("apd_validate_docs", "apd_secondary")
     builder.add_edge("apd_secondary",     "format_response")
 

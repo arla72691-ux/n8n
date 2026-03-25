@@ -54,7 +54,7 @@ def test_ftp_valid_costing_sheet_no_blockers():
     }
     mock_s = _mock_settings()
     with patch("app.nodes.ftp_node.get_settings", return_value=mock_s), \
-         patch("app.services.gemini_service.build_ftp_costing_sheet_prompt", return_value="p"), \
+         patch("app.services.gemini_service.build_ftp_costing_sheet_prompt", return_value=("p", None)), \
          patch("app.services.gemini_service.validate_document", return_value="{}"), \
          patch("app.services.gemini_service.parse_json_response", return_value=gemini_json):
         result = graph.invoke(_ftp_state([COSTING_FILE]))
@@ -81,7 +81,7 @@ def test_ftp_costing_sheet_too_old_is_blocker():
     }
     mock_s = _mock_settings()
     with patch("app.nodes.ftp_node.get_settings", return_value=mock_s), \
-         patch("app.services.gemini_service.build_ftp_costing_sheet_prompt", return_value="p"), \
+         patch("app.services.gemini_service.build_ftp_costing_sheet_prompt", return_value=("p", None)), \
          patch("app.services.gemini_service.validate_document", return_value="{}"), \
          patch("app.services.gemini_service.parse_json_response", return_value=gemini_json):
         result = graph.invoke(_ftp_state([COSTING_FILE]))
@@ -106,7 +106,7 @@ def test_ftp_missing_cost_breakdown_is_blocker():
     }
     mock_s = _mock_settings()
     with patch("app.nodes.ftp_node.get_settings", return_value=mock_s), \
-         patch("app.services.gemini_service.build_ftp_costing_sheet_prompt", return_value="p"), \
+         patch("app.services.gemini_service.build_ftp_costing_sheet_prompt", return_value=("p", None)), \
          patch("app.services.gemini_service.validate_document", return_value="{}"), \
          patch("app.services.gemini_service.parse_json_response", return_value=gemini_json):
         result = graph.invoke(_ftp_state([COSTING_FILE]))
@@ -131,7 +131,7 @@ def test_ftp_missing_signature_is_blocker():
     }
     mock_s = _mock_settings()
     with patch("app.nodes.ftp_node.get_settings", return_value=mock_s), \
-         patch("app.services.gemini_service.build_ftp_costing_sheet_prompt", return_value="p"), \
+         patch("app.services.gemini_service.build_ftp_costing_sheet_prompt", return_value=("p", None)), \
          patch("app.services.gemini_service.validate_document", return_value="{}"), \
          patch("app.services.gemini_service.parse_json_response", return_value=gemini_json):
         result = graph.invoke(_ftp_state([COSTING_FILE]))

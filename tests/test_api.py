@@ -101,15 +101,18 @@ async def test_validate_apd_with_file_upload():
     pdf_bytes = b"%PDF-1.4 mock drawing"
     item_text = "APD,ITEM NAME:BRACKET;DRAWING NUMBER:TEST-001;REVISION:0;POSITION OR ITEM NUMBER:P1"
     gemini_json = {
+        "has_drawings": "PASS",
         "drawing_number_match": "PASS",
         "revision_match": "PASS",
-        "approval_stamp": "PASS",
-        "legible": "PASS",
+        "part_number_match": "PASS",
+        "found_drawing_number": "TEST-001",
+        "found_revision": "0",
+        "found_part_numbers": "P1",
         "notes": "",
     }
     with patch("app.services.gemini_service.validate_document", return_value="{}"), \
          patch("app.services.gemini_service.parse_json_response", return_value=gemini_json), \
-         patch("app.services.gemini_service.build_apd_drawing_prompt", return_value="p"):
+         patch("app.services.gemini_service.build_apd_drawing_prompt", return_value=("p", None)):
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             r = await client.post(
                 "/validate",

@@ -1,6 +1,10 @@
 """
 Integration tests for the APD graph flow.
-Drive and Gemini services are mocked.
+
+New validation logic (no Drive):
+  - Requires an uploaded drawing attachment.
+  - Gemini reads the drawing's title block and schedule/BOM table.
+  - Checks: has_drawings, drawing_number_match, revision_match, part_number_match.
 """
 import pytest
 from unittest.mock import patch, MagicMock
@@ -21,104 +25,243 @@ def _make_state(item_long_text: str, uploaded_files=None) -> PRValidationState:
         "validation_messages": [],
         "blocker_count": 0,
         "overall_status": "ready",
+        "trace_id": "",
     }
 
 
 APD_LINE = "APD,ITEM NAME:HOLDBACK;DRAWING NUMBER:4802-1594;POSITION OR ITEM NUMBER:P3;REVISION:0"
 
+_DRAWING_FILE = {
+    "name": "4802-1594-drawing.pdf",
+    "content": b"%PDF mock drawing",
+    "mime_type": "application/pdf",
+    "doc_type": "drawing",
+}
 
-def _mock_settings(drive_enabled=True, gemini_enabled=True):
+_ALL_PASS_GEMINI = {
+    "has_drawings": "PASS",
+    "drawing_number_match": "PASS",
+    "revision_match": "PASS",
+    "part_number_match": "PASS",
+    "found_drawing_number": "4802-1594",
+    "found_revision": "0",
+    "found_part_numbers": "P3",
+    "notes": "",
+}
+
+
+def _mock_settings(gemini_enabled=True):
     s = MagicMock()
-    s.drive_enabled = drive_enabled
+    s.drive_enabled = False
     s.gemini_enabled = gemini_enabled
     s.app_env = "test"
-    s.google_drive_drawings_folder_id = "folder123"
     return s
 
 
 # ---------------------------------------------------------------------------
-# Drawing found in Drive — Gemini validates and returns pass
+# Happy path: attachment provided, all schedule-table checks pass
 # ---------------------------------------------------------------------------
 
-def test_apd_drawing_found_in_drive():
-    """When drawing is found in Drive, Gemini validates it and returns pass messages."""
-    from app.services.drive_service import DriveFile
-
-    mock_drive_file = DriveFile(id="file123", name="4802-1594-REV0.pdf", mime_type="application/pdf")
-    mock_bytes = b"%PDF-1.4 mock drawing bytes"
-    mock_gemini_json = {
-        "drawing_number_match": "PASS",
-        "revision_match": "PASS",
-        "approval_stamp": "PASS",
-        "legible": "PASS",
-        "notes": "",
-    }
-
+def test_apd_attachment_all_checks_pass():
     mock_s = _mock_settings()
     with patch("app.nodes.apd_nodes.get_settings", return_value=mock_s), \
-         patch("app.services.drive_service.search_drawing", return_value=mock_drive_file), \
-         patch("app.services.drive_service.download_file_bytes", return_value=mock_bytes), \
          patch("app.services.gemini_service.validate_document", return_value="{}"), \
-         patch("app.services.gemini_service.parse_json_response", return_value=mock_gemini_json), \
-         patch("app.services.gemini_service.build_apd_drawing_prompt", return_value="prompt"):
+         patch("app.services.gemini_service.parse_json_response", return_value=_ALL_PASS_GEMINI), \
+         patch("app.services.gemini_service.build_apd_drawing_prompt", return_value=("prompt", None)):
 
-        result = graph.invoke(_make_state(APD_LINE))
+        result = graph.invoke(_make_state(APD_LINE, uploaded_files=[_DRAWING_FILE]))
 
-    icons = [m["icon"] for m in result["validation_messages"]]
     assert result["blocker_count"] == 0
     assert result["overall_status"] == "ready"
+    icons = [m["icon"] for m in result["validation_messages"]]
     assert "✗" not in icons
 
 
 # ---------------------------------------------------------------------------
-# Drawing NOT in Drive, attachment provided — validate attachment
+# No drawing attached → blocker
 # ---------------------------------------------------------------------------
 
-def test_apd_drawing_not_in_drive_attachment_provided():
-    uploaded = [{
-        "name": "4802-1594-drawing.pdf",
-        "content": b"%PDF mock",
-        "mime_type": "application/pdf",
-        "doc_type": "drawing",
-    }]
-    mock_gemini_json = {
-        "drawing_number_match": "PASS",
-        "revision_match": "PASS",
-        "approval_stamp": "PASS",
-        "legible": "PASS",
-        "notes": "",
-    }
-
-    mock_s = _mock_settings()
-    with patch("app.nodes.apd_nodes.get_settings", return_value=mock_s), \
-         patch("app.services.drive_service.search_drawing", return_value=None), \
-         patch("app.services.gemini_service.validate_document", return_value="{}"), \
-         patch("app.services.gemini_service.parse_json_response", return_value=mock_gemini_json), \
-         patch("app.services.gemini_service.build_apd_drawing_prompt", return_value="prompt"):
-
-        result = graph.invoke(_make_state(APD_LINE, uploaded_files=uploaded))
-
-    texts = " ".join(m["text"] for m in result["validation_messages"])
-    assert "not found in system" in texts.lower()
-    assert result["blocker_count"] == 0
-
-
-# ---------------------------------------------------------------------------
-# Drawing NOT in Drive, NO attachment — blocker
-# ---------------------------------------------------------------------------
-
-def test_apd_drawing_not_in_drive_no_attachment():
+def test_apd_no_attachment_is_blocker():
     mock_s = _mock_settings(gemini_enabled=False)
-    with patch("app.nodes.apd_nodes.get_settings", return_value=mock_s), \
-         patch("app.services.drive_service.search_drawing", return_value=None):
-
+    with patch("app.nodes.apd_nodes.get_settings", return_value=mock_s):
         result = graph.invoke(_make_state(APD_LINE))
 
     assert result["blocker_count"] >= 1
     assert result["overall_status"] == "blockers"
-    blocker_msgs = [m for m in result["validation_messages"] if m["icon"] == "✗"]
-    assert len(blocker_msgs) >= 1
-    assert "blocker" in blocker_msgs[0]["text"].lower()
+    blocker_texts = " ".join(m["text"] for m in result["validation_messages"] if m["icon"] == "✗")
+    assert "no drawing attachment" in blocker_texts.lower()
+
+
+# ---------------------------------------------------------------------------
+# has_drawings=FAIL → blank/empty file → blocker, other checks skipped
+# ---------------------------------------------------------------------------
+
+def test_apd_empty_drawing_is_blocker():
+    gemini_json = {**_ALL_PASS_GEMINI, "has_drawings": "FAIL"}
+    mock_s = _mock_settings()
+    with patch("app.nodes.apd_nodes.get_settings", return_value=mock_s), \
+         patch("app.services.gemini_service.validate_document", return_value="{}"), \
+         patch("app.services.gemini_service.parse_json_response", return_value=gemini_json), \
+         patch("app.services.gemini_service.build_apd_drawing_prompt", return_value=("prompt", None)):
+
+        result = graph.invoke(_make_state(APD_LINE, uploaded_files=[_DRAWING_FILE]))
+
+    assert result["blocker_count"] >= 1
+    blocker_texts = " ".join(m["text"] for m in result["validation_messages"] if m["icon"] == "✗")
+    assert "blank" in blocker_texts.lower() or "no drawing content" in blocker_texts.lower()
+
+
+# ---------------------------------------------------------------------------
+# drawing_number_match=FAIL → blocker
+# ---------------------------------------------------------------------------
+
+def test_apd_drawing_number_mismatch_is_blocker():
+    gemini_json = {
+        **_ALL_PASS_GEMINI,
+        "drawing_number_match": "FAIL",
+        "found_drawing_number": "9999-0000",
+    }
+    mock_s = _mock_settings()
+    with patch("app.nodes.apd_nodes.get_settings", return_value=mock_s), \
+         patch("app.services.gemini_service.validate_document", return_value="{}"), \
+         patch("app.services.gemini_service.parse_json_response", return_value=gemini_json), \
+         patch("app.services.gemini_service.build_apd_drawing_prompt", return_value=("prompt", None)):
+
+        result = graph.invoke(_make_state(APD_LINE, uploaded_files=[_DRAWING_FILE]))
+
+    assert result["blocker_count"] >= 1
+    blocker_texts = " ".join(m["text"] for m in result["validation_messages"] if m["icon"] == "✗")
+    assert "drawing number" in blocker_texts.lower()
+
+
+# ---------------------------------------------------------------------------
+# revision_match=FAIL → blocker
+# ---------------------------------------------------------------------------
+
+def test_apd_revision_mismatch_is_blocker():
+    gemini_json = {
+        **_ALL_PASS_GEMINI,
+        "revision_match": "FAIL",
+        "found_revision": "B",
+    }
+    mock_s = _mock_settings()
+    with patch("app.nodes.apd_nodes.get_settings", return_value=mock_s), \
+         patch("app.services.gemini_service.validate_document", return_value="{}"), \
+         patch("app.services.gemini_service.parse_json_response", return_value=gemini_json), \
+         patch("app.services.gemini_service.build_apd_drawing_prompt", return_value=("prompt", None)):
+
+        result = graph.invoke(_make_state(APD_LINE, uploaded_files=[_DRAWING_FILE]))
+
+    assert result["blocker_count"] >= 1
+    blocker_texts = " ".join(m["text"] for m in result["validation_messages"] if m["icon"] == "✗")
+    assert "revision" in blocker_texts.lower()
+
+
+# ---------------------------------------------------------------------------
+# part_number_match=FAIL → blocker
+# ---------------------------------------------------------------------------
+
+def test_apd_part_number_mismatch_is_blocker():
+    gemini_json = {
+        **_ALL_PASS_GEMINI,
+        "part_number_match": "FAIL",
+        "found_part_numbers": "P1, P2",
+    }
+    mock_s = _mock_settings()
+    with patch("app.nodes.apd_nodes.get_settings", return_value=mock_s), \
+         patch("app.services.gemini_service.validate_document", return_value="{}"), \
+         patch("app.services.gemini_service.parse_json_response", return_value=gemini_json), \
+         patch("app.services.gemini_service.build_apd_drawing_prompt", return_value=("prompt", None)):
+
+        result = graph.invoke(_make_state(APD_LINE, uploaded_files=[_DRAWING_FILE]))
+
+    assert result["blocker_count"] >= 1
+    blocker_texts = " ".join(m["text"] for m in result["validation_messages"] if m["icon"] == "✗")
+    assert "part" in blocker_texts.lower() or "item" in blocker_texts.lower()
+
+
+# ---------------------------------------------------------------------------
+# part_number_match=NOT_CHECKED → no blocker (no BOM table visible on drawing)
+# ---------------------------------------------------------------------------
+
+def test_apd_part_number_not_checked_no_blocker():
+    gemini_json = {**_ALL_PASS_GEMINI, "part_number_match": "NOT_CHECKED"}
+    mock_s = _mock_settings()
+    with patch("app.nodes.apd_nodes.get_settings", return_value=mock_s), \
+         patch("app.services.gemini_service.validate_document", return_value="{}"), \
+         patch("app.services.gemini_service.parse_json_response", return_value=gemini_json), \
+         patch("app.services.gemini_service.build_apd_drawing_prompt", return_value=("prompt", None)):
+
+        result = graph.invoke(_make_state(APD_LINE, uploaded_files=[_DRAWING_FILE]))
+
+    assert result["blocker_count"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Gemini returns unparseable JSON → warning, not crash
+# ---------------------------------------------------------------------------
+
+def test_apd_gemini_malformed_json_gives_warning():
+    mock_s = _mock_settings()
+    with patch("app.nodes.apd_nodes.get_settings", return_value=mock_s), \
+         patch("app.services.gemini_service.validate_document", return_value="not-json"), \
+         patch("app.services.gemini_service.parse_json_response", side_effect=ValueError("bad json")), \
+         patch("app.services.gemini_service.build_apd_drawing_prompt", return_value=("prompt", None)):
+
+        result = graph.invoke(_make_state(APD_LINE, uploaded_files=[_DRAWING_FILE]))
+
+    assert result["blocker_count"] == 0
+    texts = " ".join(m["text"] for m in result["validation_messages"])
+    assert "manual review" in texts.lower()
+
+
+# ---------------------------------------------------------------------------
+# Gemini disabled → warning message, no blocker
+# ---------------------------------------------------------------------------
+
+def test_apd_gemini_disabled_gives_warning_not_blocker():
+    mock_s = _mock_settings(gemini_enabled=False)
+    with patch("app.nodes.apd_nodes.get_settings", return_value=mock_s):
+        result = graph.invoke(_make_state(APD_LINE, uploaded_files=[_DRAWING_FILE]))
+
+    assert result["blocker_count"] == 0
+    texts = " ".join(m["text"] for m in result["validation_messages"])
+    assert "gemini validation skipped" in texts.lower() or "manually verify" in texts.lower()
+
+
+# ---------------------------------------------------------------------------
+# Multi-position drawing: same drawing covers two items → ⚠ advisory
+# ---------------------------------------------------------------------------
+
+def test_apd_multi_position_drawing_advisory():
+    two_items = (
+        "APD,ITEM NAME:HOLDBACK;DRAWING NUMBER:4802-1594;POSITION OR ITEM NUMBER:P3;REVISION:0\n"
+        "APD,ITEM NAME:BOLT;DRAWING NUMBER:4802-1594;POSITION OR ITEM NUMBER:P4;REVISION:0"
+    )
+    gemini_json = {**_ALL_PASS_GEMINI, "found_part_numbers": "P3, P4"}
+    mock_s = _mock_settings()
+    with patch("app.nodes.apd_nodes.get_settings", return_value=mock_s), \
+         patch("app.services.gemini_service.validate_document", return_value="{}"), \
+         patch("app.services.gemini_service.parse_json_response", return_value=gemini_json), \
+         patch("app.services.gemini_service.build_apd_drawing_prompt", return_value=("prompt", None)):
+
+        result = graph.invoke(_make_state(two_items, uploaded_files=[_DRAWING_FILE]))
+
+    texts = " ".join(m["text"] for m in result["validation_messages"])
+    assert "covers" in texts.lower() or "positions" in texts.lower()
+    assert result["blocker_count"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Empty item_long_text → parse failure blocker
+# ---------------------------------------------------------------------------
+
+def test_apd_empty_item_long_text_is_blocker():
+    result = graph.invoke(_make_state(""))
+    assert result["blocker_count"] >= 1
+    assert result["overall_status"] == "blockers"
+    texts = " ".join(m["text"] for m in result["validation_messages"])
+    assert "no valid apd items" in texts.lower()
 
 
 # ---------------------------------------------------------------------------
@@ -137,6 +280,7 @@ def test_non_apd_no_blocker():
         "validation_messages": [],
         "blocker_count": 0,
         "overall_status": "ready",
+        "trace_id": "",
     }
     result = graph.invoke(state)
     assert result["blocker_count"] == 0
@@ -161,6 +305,7 @@ def test_ftp_missing_attachment():
         "validation_messages": [],
         "blocker_count": 0,
         "overall_status": "ready",
+        "trace_id": "",
     }
     result = graph.invoke(state)
     assert result["blocker_count"] >= 1
@@ -183,6 +328,7 @@ def test_pac_missing_certificate():
         "validation_messages": [],
         "blocker_count": 0,
         "overall_status": "ready",
+        "trace_id": "",
     }
     result = graph.invoke(state)
     assert result["blocker_count"] >= 1
@@ -205,9 +351,10 @@ def test_service_missing_all_docs():
         "validation_messages": [],
         "blocker_count": 0,
         "overall_status": "ready",
+        "trace_id": "",
     }
     result = graph.invoke(state)
-    assert result["blocker_count"] == 3  # one per missing doc
+    assert result["blocker_count"] == 3
     assert result["overall_status"] == "blockers"
 
 
@@ -230,206 +377,7 @@ def test_service_partial_docs():
         "validation_messages": [],
         "blocker_count": 0,
         "overall_status": "ready",
+        "trace_id": "",
     }
     result = graph.invoke(state)
     assert result["blocker_count"] == 2
-
-
-# ---------------------------------------------------------------------------
-# APD: empty item_long_text → parse failure blocker
-# ---------------------------------------------------------------------------
-
-def test_apd_empty_item_long_text_is_blocker():
-    """Empty item_long_text → parse failure creates a blocker; no Drive call needed."""
-    result = graph.invoke(_make_state(""))
-    assert result["blocker_count"] >= 1
-    assert result["overall_status"] == "blockers"
-    texts = " ".join(m["text"] for m in result["validation_messages"])
-    assert "no valid apd items" in texts.lower()
-
-
-# ---------------------------------------------------------------------------
-# APD: Gemini returns unparseable JSON → warning, not crash
-# ---------------------------------------------------------------------------
-
-def test_apd_gemini_malformed_json_gives_warning():
-    """parse_json_response raises → ⚠ warning emitted, blocker_count stays 0."""
-    from app.services.drive_service import DriveFile
-
-    drive_file = DriveFile(id="f1", name="4802-1594.pdf", mime_type="application/pdf")
-    mock_s = _mock_settings()
-    with patch("app.nodes.apd_nodes.get_settings", return_value=mock_s), \
-         patch("app.services.drive_service.search_drawing", return_value=drive_file), \
-         patch("app.services.drive_service.download_file_bytes", return_value=b"%PDF"), \
-         patch("app.services.gemini_service.build_apd_drawing_prompt", return_value="p"), \
-         patch("app.services.gemini_service.validate_document", return_value="not-json"), \
-         patch("app.services.gemini_service.parse_json_response", side_effect=ValueError("bad json")):
-        result = graph.invoke(_make_state(APD_LINE))
-
-    assert result["blocker_count"] == 0
-    texts = " ".join(m["text"] for m in result["validation_messages"])
-    assert "manual review" in texts.lower()
-
-
-# ---------------------------------------------------------------------------
-# APD: legible=FAIL → blocker + early return (revision/stamp NOT checked)
-# ---------------------------------------------------------------------------
-
-def test_apd_drawing_not_legible_is_blocker():
-    """legible=FAIL → single blocker; subsequent checks skipped."""
-    from app.services.drive_service import DriveFile
-
-    drive_file = DriveFile(id="f1", name="4802-1594.pdf", mime_type="application/pdf")
-    gemini_json = {
-        "drawing_number_match": "PASS",
-        "revision_match": "PASS",
-        "approval_stamp": "PASS",
-        "legible": "FAIL",
-        "notes": "",
-    }
-    mock_s = _mock_settings()
-    with patch("app.nodes.apd_nodes.get_settings", return_value=mock_s), \
-         patch("app.services.drive_service.search_drawing", return_value=drive_file), \
-         patch("app.services.drive_service.download_file_bytes", return_value=b"%PDF"), \
-         patch("app.services.gemini_service.build_apd_drawing_prompt", return_value="p"), \
-         patch("app.services.gemini_service.validate_document", return_value="{}"), \
-         patch("app.services.gemini_service.parse_json_response", return_value=gemini_json):
-        result = graph.invoke(_make_state(APD_LINE))
-
-    assert result["blocker_count"] >= 1
-    texts = " ".join(m["text"] for m in result["validation_messages"])
-    assert "legible" in texts.lower() or "readable" in texts.lower()
-
-
-# ---------------------------------------------------------------------------
-# APD: drawing_number_match=FAIL → blocker
-# ---------------------------------------------------------------------------
-
-def test_apd_drawing_number_mismatch_is_blocker():
-    from app.services.drive_service import DriveFile
-
-    drive_file = DriveFile(id="f1", name="4802-1594.pdf", mime_type="application/pdf")
-    gemini_json = {
-        "drawing_number_match": "FAIL",
-        "revision_match": "PASS",
-        "approval_stamp": "PASS",
-        "legible": "PASS",
-        "notes": "",
-    }
-    mock_s = _mock_settings()
-    with patch("app.nodes.apd_nodes.get_settings", return_value=mock_s), \
-         patch("app.services.drive_service.search_drawing", return_value=drive_file), \
-         patch("app.services.drive_service.download_file_bytes", return_value=b"%PDF"), \
-         patch("app.services.gemini_service.build_apd_drawing_prompt", return_value="p"), \
-         patch("app.services.gemini_service.validate_document", return_value="{}"), \
-         patch("app.services.gemini_service.parse_json_response", return_value=gemini_json):
-        result = graph.invoke(_make_state(APD_LINE))
-
-    assert result["blocker_count"] >= 1
-    blocker_texts = " ".join(m["text"] for m in result["validation_messages"] if m["icon"] == "✗")
-    assert "drawing number" in blocker_texts.lower()
-
-
-# ---------------------------------------------------------------------------
-# APD: revision_match=FAIL → blocker
-# ---------------------------------------------------------------------------
-
-def test_apd_revision_mismatch_is_blocker():
-    from app.services.drive_service import DriveFile
-
-    drive_file = DriveFile(id="f1", name="4802-1594.pdf", mime_type="application/pdf")
-    gemini_json = {
-        "drawing_number_match": "PASS",
-        "revision_match": "FAIL",
-        "approval_stamp": "PASS",
-        "legible": "PASS",
-        "notes": "",
-    }
-    mock_s = _mock_settings()
-    with patch("app.nodes.apd_nodes.get_settings", return_value=mock_s), \
-         patch("app.services.drive_service.search_drawing", return_value=drive_file), \
-         patch("app.services.drive_service.download_file_bytes", return_value=b"%PDF"), \
-         patch("app.services.gemini_service.build_apd_drawing_prompt", return_value="p"), \
-         patch("app.services.gemini_service.validate_document", return_value="{}"), \
-         patch("app.services.gemini_service.parse_json_response", return_value=gemini_json):
-        result = graph.invoke(_make_state(APD_LINE))
-
-    assert result["blocker_count"] >= 1
-    blocker_texts = " ".join(m["text"] for m in result["validation_messages"] if m["icon"] == "✗")
-    assert "revision" in blocker_texts.lower()
-
-
-# ---------------------------------------------------------------------------
-# APD: approval_stamp=FAIL → blocker
-# ---------------------------------------------------------------------------
-
-def test_apd_missing_approval_stamp_is_blocker():
-    from app.services.drive_service import DriveFile
-
-    drive_file = DriveFile(id="f1", name="4802-1594.pdf", mime_type="application/pdf")
-    gemini_json = {
-        "drawing_number_match": "PASS",
-        "revision_match": "PASS",
-        "approval_stamp": "FAIL",
-        "legible": "PASS",
-        "notes": "",
-    }
-    mock_s = _mock_settings()
-    with patch("app.nodes.apd_nodes.get_settings", return_value=mock_s), \
-         patch("app.services.drive_service.search_drawing", return_value=drive_file), \
-         patch("app.services.drive_service.download_file_bytes", return_value=b"%PDF"), \
-         patch("app.services.gemini_service.build_apd_drawing_prompt", return_value="p"), \
-         patch("app.services.gemini_service.validate_document", return_value="{}"), \
-         patch("app.services.gemini_service.parse_json_response", return_value=gemini_json):
-        result = graph.invoke(_make_state(APD_LINE))
-
-    assert result["blocker_count"] >= 1
-    blocker_texts = " ".join(m["text"] for m in result["validation_messages"] if m["icon"] == "✗")
-    assert "stamp" in blocker_texts.lower() or "signature" in blocker_texts.lower()
-
-
-# ---------------------------------------------------------------------------
-# APD: Drive search throws exception → error warning + falls through to attachment
-# ---------------------------------------------------------------------------
-
-def test_apd_drive_search_exception_falls_through_to_attachment():
-    """Drive raises → error ⚠ message added; no attachment → blocker."""
-    mock_s = _mock_settings()
-    with patch("app.nodes.apd_nodes.get_settings", return_value=mock_s), \
-         patch("app.services.drive_service.search_drawing", side_effect=Exception("network timeout")):
-        result = graph.invoke(_make_state(APD_LINE))
-
-    assert result["blocker_count"] >= 1
-    texts = " ".join(m["text"] for m in result["validation_messages"])
-    assert "error" in texts.lower() or "not found" in texts.lower()
-
-
-# ---------------------------------------------------------------------------
-# APD: all checks PASS → overall_status "ready"
-# ---------------------------------------------------------------------------
-
-def test_apd_all_checks_pass_status_ready():
-    """Full happy path: drawing in Drive, all Gemini fields PASS → 0 blockers, ready."""
-    from app.services.drive_service import DriveFile
-
-    drive_file = DriveFile(id="f1", name="4802-1594-REV0.pdf", mime_type="application/pdf")
-    gemini_json = {
-        "drawing_number_match": "PASS",
-        "revision_match": "PASS",
-        "approval_stamp": "PASS",
-        "legible": "PASS",
-        "notes": "",
-    }
-    mock_s = _mock_settings()
-    with patch("app.nodes.apd_nodes.get_settings", return_value=mock_s), \
-         patch("app.services.drive_service.search_drawing", return_value=drive_file), \
-         patch("app.services.drive_service.download_file_bytes", return_value=b"%PDF"), \
-         patch("app.services.gemini_service.build_apd_drawing_prompt", return_value="p"), \
-         patch("app.services.gemini_service.validate_document", return_value="{}"), \
-         patch("app.services.gemini_service.parse_json_response", return_value=gemini_json):
-        result = graph.invoke(_make_state(APD_LINE))
-
-    assert result["blocker_count"] == 0
-    assert result["overall_status"] == "ready"
-    icons = [m["icon"] for m in result["validation_messages"]]
-    assert "✗" not in icons

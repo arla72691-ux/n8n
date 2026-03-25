@@ -1,10 +1,18 @@
 """
 LangGraph nodes for Supply PR (APD — As Per Drawing) validation.
 
-Flow: parse_items → search_drive → validate_documents → secondary_validations
+Flow: parse_items → validate_documents → secondary_validations
+
+Validation logic:
+  1. parse_items   — parse item_long_text into structured APDItem objects.
+  2. validate_docs — for each unique drawing, require an uploaded drawing attachment
+                     and use Gemini to read its title block and schedule/BOM table,
+                     cross-checking drawing number, part/item number, and revision
+                     against the values in item_long_text. Also checks the file
+                     contains actual drawing content (not blank pages).
+  3. secondary     — flag multi-position drawings that cover several line items.
 """
-import mimetypes
-from typing import Optional
+from typing import List, Optional
 
 from app.state import PRValidationState, ValidationMessage, UploadedFile
 from app.utils.apd_parser import parse_item_long_text, unique_drawings, items_by_drawing, APDItem
@@ -47,95 +55,54 @@ def parse_items(state: PRValidationState) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Node 2: Search Google Drive for each unique drawing
-# ---------------------------------------------------------------------------
-
-def search_drive(state: PRValidationState) -> dict:
-    settings = get_settings()
-    parsed_items = state.get("parsed_items", [])
-
-    if not parsed_items:
-        return {"drive_results": {}}
-
-    drive_results: dict = {}
-
-    if not settings.drive_enabled:
-        # Drive not configured — mark all as not found (will fall through to attachment check)
-        for item in unique_drawings(parsed_items):
-            drive_results[item.drawing_number] = {"file": None, "bytes": None}
-        return {"drive_results": drive_results}
-
-    from app.services import drive_service
-
-    for item in unique_drawings(parsed_items):
-        dn = item.drawing_number
-        rev = item.normalised_revision
-        try:
-            found = drive_service.search_drawing(dn, rev)
-            if found:
-                file_bytes = drive_service.download_file_bytes(found.id)
-                drive_results[dn] = {"file": found, "bytes": file_bytes}
-            else:
-                drive_results[dn] = {"file": None, "bytes": None}
-        except Exception as exc:
-            drive_results[dn] = {"file": None, "bytes": None, "error": str(exc)}
-
-    return {"drive_results": drive_results}
-
-
-# ---------------------------------------------------------------------------
-# Node 3: Validate documents (Drive file or uploaded attachment)
+# Node 2: Validate uploaded drawing attachments against item long text
 # ---------------------------------------------------------------------------
 
 def validate_documents(state: PRValidationState) -> dict:
     settings = get_settings()
     parsed_items = state.get("parsed_items", [])
-    drive_results = state.get("drive_results", {})
     uploaded_files = state.get("uploaded_files", [])
     messages = list(state.get("validation_messages", []))
     blocker_count = state.get("blocker_count", 0)
+    trace_id = state.get("trace_id", "")
+
+    if not parsed_items:
+        return {"validation_messages": messages, "blocker_count": blocker_count}
 
     items_map = items_by_drawing(parsed_items)
 
     for drawing_number, drawing_items in items_map.items():
         rep_item: APDItem = drawing_items[0]
         rev = rep_item.normalised_revision
-        drive_entry = drive_results.get(drawing_number, {"file": None, "bytes": None})
-        drive_file = drive_entry.get("file")
-        drive_bytes = drive_entry.get("bytes")
-        drive_error = drive_entry.get("error")
+        part_numbers = [i.position for i in drawing_items if i.position]
 
-        if drive_error:
-            messages.append(_msg("⚠", f"Drawing {drawing_number}: Drive search encountered an error ({drive_error}). Checking for attachment."))
+        # Find the uploaded drawing attachment for this drawing number.
+        # First try matching by filename; fall back to any file tagged as "drawing".
+        uploaded = _find_uploaded_file_for_drawing(drawing_number, uploaded_files)
+        if not uploaded:
+            uploaded = next((f for f in uploaded_files if f.get("doc_type") == "drawing"), None)
 
-        trace_id = state.get("trace_id", "")
+        if not uploaded:
+            messages.append(_msg("✗", (
+                f"Drawing {drawing_number}: No drawing attachment found. "
+                "Please attach the drawing to proceed."
+            )))
+            blocker_count += 1
+            continue
 
-        if drive_file:
-            # Drawing found in Drive
-            if settings.gemini_enabled:
-                result = _gemini_validate_drawing(drive_bytes, drive_file.mime_type or "application/pdf", drawing_number, rev, trace_id)
-                messages.extend(result["messages"])
-                blocker_count += result["blockers"]
-            else:
-                messages.append(_msg("✓", f"Drawing {drawing_number} found in system (REV {rev}). Gemini validation skipped (API key not configured)."))
+        if settings.gemini_enabled:
+            result = _gemini_validate_drawing(
+                uploaded["content"], uploaded["mime_type"],
+                drawing_number, rev, part_numbers, trace_id,
+            )
+            messages.extend(result["messages"])
+            blocker_count += result["blockers"]
         else:
-            # Not in Drive — look for uploaded attachment
-            uploaded = _find_uploaded_file_for_drawing(drawing_number, uploaded_files)
-            if not uploaded:
-                # Also accept any file tagged as "drawing"
-                uploaded = next((f for f in uploaded_files if f.get("doc_type") == "drawing"), None)
-
-            if not uploaded:
-                messages.append(_msg("✗", f"Drawing {drawing_number} not found in the system and no drawing attached. This is a blocker — please attach the drawing to proceed."))
-                blocker_count += 1
-            else:
-                messages.append(_msg("⚠", f"Drawing {drawing_number} not found in system. Validating attached file '{uploaded['name']}'."))
-                if settings.gemini_enabled:
-                    result = _gemini_validate_drawing(uploaded["content"], uploaded["mime_type"], drawing_number, rev, trace_id)
-                    messages.extend(result["messages"])
-                    blocker_count += result["blockers"]
-                else:
-                    messages.append(_msg("⚠", f"Gemini validation skipped (API key not configured). Please manually verify drawing {drawing_number}."))
+            messages.append(_msg("⚠", (
+                f"Drawing {drawing_number}: Gemini validation skipped (API key not configured). "
+                "Please manually verify the drawing number, revision, and part/item numbers "
+                "against the item long text."
+            )))
 
     return {
         "validation_messages": messages,
@@ -144,14 +111,22 @@ def validate_documents(state: PRValidationState) -> dict:
 
 
 def _gemini_validate_drawing(
-    file_bytes: bytes, mime_type: str, drawing_number: str, revision: str,
+    file_bytes: bytes,
+    mime_type: str,
+    drawing_number: str,
+    revision: str,
+    part_numbers: List[str] = None,
     trace_id: str = "",
 ) -> dict:
     from app.services import gemini_service
 
-    prompt, lf_prompt = gemini_service.build_apd_drawing_prompt(drawing_number, revision)
-    raw = gemini_service.validate_document(file_bytes, mime_type, prompt,
-                                           langfuse_prompt=lf_prompt, trace_id=trace_id)
+    prompt, lf_prompt = gemini_service.build_apd_drawing_prompt(
+        drawing_number, revision, part_numbers or []
+    )
+    raw = gemini_service.validate_document(
+        file_bytes, mime_type, prompt,
+        langfuse_prompt=lf_prompt, trace_id=trace_id,
+    )
 
     try:
         result = gemini_service.parse_json_response(raw)
@@ -164,88 +139,89 @@ def _gemini_validate_drawing(
     messages = []
     blockers = 0
 
-    dn_match = result.get("drawing_number_match", "UNCLEAR")
-    rev_match = result.get("revision_match", "UNCLEAR")
-    stamp = result.get("approval_stamp", "UNCLEAR")
-    legible = result.get("legible", "FAIL")
-    notes = result.get("notes", "")
+    has_drawings = result.get("has_drawings", "PASS")
+    dn_match     = result.get("drawing_number_match", "UNCLEAR")
+    rev_match    = result.get("revision_match", "UNCLEAR")
+    pn_match     = result.get("part_number_match", "NOT_CHECKED")
+    found_dn     = result.get("found_drawing_number")
+    found_rev    = result.get("found_revision")
+    found_pn     = result.get("found_part_numbers")
+    notes        = result.get("notes", "")
 
-    if legible == "FAIL":
-        messages.append(_msg("✗", f"Drawing {drawing_number}: Drawing is not legible. Please attach a clear, readable copy."))
+    # Check 1 — Drawing content present
+    if has_drawings == "FAIL":
+        messages.append(_msg("✗", (
+            f"Drawing {drawing_number}: The attached file appears to be blank or contains no "
+            "drawing content. Please attach a valid engineering drawing."
+        )))
         blockers += 1
         return {"messages": messages, "blockers": blockers}
 
+    # Check 2 — Drawing number
     if dn_match == "PASS":
-        messages.append(_msg("✓", f"Drawing {drawing_number}: Drawing number verified on document."))
+        messages.append(_msg("✓", f"Drawing {drawing_number}: Drawing number verified on title block."))
     elif dn_match == "FAIL":
-        messages.append(_msg("✗", f"Drawing {drawing_number}: Drawing number not visible or does not match. Please verify."))
+        found_str = f" (found: {found_dn})" if found_dn else ""
+        messages.append(_msg("✗", (
+            f"Drawing {drawing_number}: Drawing number on attachment does not match{found_str}. "
+            "Please verify the correct drawing is attached."
+        )))
         blockers += 1
     else:
-        messages.append(_msg("⚠", f"Drawing {drawing_number}: Drawing number visibility unclear. Please manually verify."))
+        messages.append(_msg("⚠", f"Drawing {drawing_number}: Drawing number could not be clearly read from title block. Please manually verify."))
 
+    # Check 3 — Revision
     if rev_match == "PASS":
-        messages.append(_msg("✓", f"Drawing {drawing_number}: Revision {revision} verified."))
+        messages.append(_msg("✓", f"Drawing {drawing_number}: Revision {revision} verified on drawing."))
     elif rev_match == "FAIL":
-        messages.append(_msg("✗", f"Drawing {drawing_number}: Revision mismatch detected. Item long text specifies REV {revision}. Please confirm correct revision."))
+        found_str = f" (found: REV {found_rev})" if found_rev else ""
+        messages.append(_msg("✗", (
+            f"Drawing {drawing_number}: Revision mismatch — item long text specifies REV {revision}{found_str}. "
+            "Please confirm the correct revision is attached."
+        )))
         blockers += 1
     else:
-        messages.append(_msg("⚠", f"Drawing {drawing_number}: Revision visibility unclear. Please manually verify REV {revision}."))
+        messages.append(_msg("⚠", f"Drawing {drawing_number}: Revision could not be clearly read. Please manually verify REV {revision}."))
 
-    if stamp == "PASS":
-        messages.append(_msg("✓", f"Drawing {drawing_number}: Approval stamp or authorising signature found on title block."))
-    elif stamp == "FAIL":
-        messages.append(_msg("✗", f"Drawing {drawing_number}: No approval stamp or authorising engineer found on title block. This is a blocker."))
+    # Check 4 — Part/item numbers from schedule table
+    if pn_match == "PASS":
+        messages.append(_msg("✓", f"Drawing {drawing_number}: Part/item number(s) verified in drawing schedule table."))
+    elif pn_match == "FAIL":
+        found_str = f" (found in table: {found_pn})" if found_pn else ""
+        messages.append(_msg("✗", (
+            f"Drawing {drawing_number}: Part/item number(s) from item long text not found in "
+            f"drawing schedule/BOM table{found_str}. Please verify the drawing covers the correct items."
+        )))
         blockers += 1
-    else:
-        messages.append(_msg("⚠", f"Drawing {drawing_number}: Approval stamp unclear. Please manually verify title block."))
+    elif pn_match == "UNCLEAR":
+        messages.append(_msg("⚠", f"Drawing {drawing_number}: Part/item numbers could not be clearly read from schedule table. Please manually verify."))
+    # NOT_CHECKED: no schedule table visible — silently skip
 
     if notes:
-        messages.append(_msg("⚠", f"Drawing {drawing_number}: Additional note — {notes}"))
+        messages.append(_msg("⚠", f"Drawing {drawing_number}: {notes}"))
 
     return {"messages": messages, "blockers": blockers}
 
 
 # ---------------------------------------------------------------------------
-# Node 4: Secondary validations (material mismatch, multi-position check)
+# Node 3: Secondary validations (multi-position drawing check)
 # ---------------------------------------------------------------------------
 
 def secondary_validations(state: PRValidationState) -> dict:
-    settings = get_settings()
     parsed_items = state.get("parsed_items", [])
-    drive_results = state.get("drive_results", {})
     messages = list(state.get("validation_messages", []))
     blocker_count = state.get("blocker_count", 0)
 
     items_map = items_by_drawing(parsed_items)
 
     for drawing_number, drawing_items in items_map.items():
-        # Material mismatch check (only if Gemini is available and drawing was found)
-        materials = [i.material for i in drawing_items if i.material]
-        if materials and settings.gemini_enabled:
-            drive_entry = drive_results.get(drawing_number, {})
-            file_bytes = drive_entry.get("bytes")
-            if file_bytes:
-                material_str = ", ".join(set(materials))
-                prompt = (
-                    f"Does this engineering drawing reference or specify the material '{material_str}'? "
-                    f"If a different material is specified on the drawing, flag it. "
-                    f"Respond with JSON: {{\"material_match\": \"PASS\"|\"FAIL\"|\"UNCLEAR\", \"drawing_material\": \"<material on drawing or null>\"}}"
-                )
-                try:
-                    from app.services import gemini_service
-                    raw = gemini_service.validate_document(file_bytes, "application/pdf", prompt)
-                    result = gemini_service.parse_json_response(raw)
-                    if result.get("material_match") == "FAIL":
-                        drawing_mat = result.get("drawing_material", "unknown")
-                        messages.append(_msg("⚠", f"Drawing {drawing_number}: Material mismatch — item long text specifies '{material_str}' but drawing shows '{drawing_mat}'. Please verify."))
-                except Exception:
-                    pass  # Don't block on secondary check failures
-
-        # Multi-position drawing check
         if len(drawing_items) > 1:
             positions = [i.position for i in drawing_items if i.position]
             pos_str = ", ".join(positions) if positions else "(unlabelled)"
-            messages.append(_msg("⚠", f"Drawing {drawing_number} is used for {len(drawing_items)} items (positions: {pos_str}). Confirm the drawing covers all listed positions."))
+            messages.append(_msg("⚠", (
+                f"Drawing {drawing_number} covers {len(drawing_items)} items (positions: {pos_str}). "
+                "Confirm the drawing schedule table lists all of these positions."
+            )))
 
     return {
         "validation_messages": messages,
