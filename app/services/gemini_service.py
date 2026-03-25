@@ -100,7 +100,11 @@ def build_apd_drawing_prompt(drawing_number: str, revision: str, part_numbers: l
 Expected values from the Purchase Requisition item long text:
 - Drawing number: {drawing_number}
 - Revision: {revision} (treat 0, 00, and "NO REVISION" as equivalent base revisions)
-- Part/Item number(s): {part_numbers_str}
+- Position/item number(s): {part_numbers_str}
+
+These position/item numbers are the FIND NUMBERS or ITEM NUMBERS from the drawing — they appear in the
+leftmost "ITEM NO." or "POS." column of the drawing's parts list or schedule table, and as numbered
+balloon callouts on the drawing itself. They are NOT the part number or drawing number.
 
 Examine the drawing's title block, revision table, and parts schedule/BOM table carefully.
 Respond ONLY with a JSON object in exactly this format:
@@ -108,10 +112,10 @@ Respond ONLY with a JSON object in exactly this format:
   "has_drawings": "PASS" | "FAIL",
   "drawing_number_match": "PASS" | "FAIL" | "UNCLEAR",
   "revision_match": "PASS" | "FAIL" | "UNCLEAR",
-  "part_number_match": "PASS" | "FAIL" | "UNCLEAR" | "NOT_CHECKED",
+  "position_number_match": "PASS" | "FAIL" | "UNCLEAR" | "NOT_CHECKED",
   "found_drawing_number": "<drawing number found on document, or null>",
   "found_revision": "<revision found on document, or null>",
-  "found_part_numbers": "<part/item numbers found in schedule table, or null>",
+  "found_position_numbers": "<all position/item/find numbers found in the schedule table, or null>",
   "notes": "<brief explanation of any issues, or empty string>"
 }}
 
@@ -119,7 +123,9 @@ Criteria:
 - has_drawings: Are actual engineering drawings present? FAIL if pages are blank or contain no drawing geometry/content.
 - drawing_number_match: Does the drawing number in the title block match {drawing_number}?
 - revision_match: Does the revision on the drawing match {revision} (treat 0, 00, NO REVISION as equivalent)?
-- part_number_match: Do the part/item numbers in the drawing's schedule or BOM table include {part_numbers_str}? Use NOT_CHECKED if no schedule/BOM table is visible."""
+- position_number_match: Does the parts list or schedule table contain ALL of the position/item numbers {part_numbers_str}?
+  PASS only if every listed position/item number is found. FAIL if any are missing.
+  Use NOT_CHECKED ONLY if there is genuinely no parts list or schedule table visible (e.g. a single-component detail drawing with no BOM)."""
     from app.services.langfuse_service import get_prompt_and_client, PROMPT_APD_DRAWING
     return get_prompt_and_client(PROMPT_APD_DRAWING, fallback=fallback,
                                  drawing_number=drawing_number, revision=revision,

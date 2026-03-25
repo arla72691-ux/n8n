@@ -146,10 +146,10 @@ def _gemini_validate_drawing(
     has_drawings = result.get("has_drawings", "PASS")
     dn_match     = result.get("drawing_number_match", "UNCLEAR")
     rev_match    = result.get("revision_match", "UNCLEAR")
-    pn_match     = result.get("part_number_match", "NOT_CHECKED")
+    pn_match     = result.get("position_number_match", result.get("part_number_match", "NOT_CHECKED"))
     found_dn     = result.get("found_drawing_number")
     found_rev    = result.get("found_revision")
-    found_pn     = result.get("found_part_numbers")
+    found_pn     = result.get("found_position_numbers", result.get("found_part_numbers"))
     notes        = result.get("notes", "")
 
     # Check 1 — Drawing content present
@@ -187,19 +187,28 @@ def _gemini_validate_drawing(
     else:
         messages.append(_msg("⚠", f"Drawing {drawing_number}: Revision could not be clearly read. Please manually verify REV {revision}."))
 
-    # Check 4 — Part/item numbers from schedule table
+    # Check 4 — Position/item numbers from schedule table
     if pn_match == "PASS":
-        messages.append(_msg("✓", f"Drawing {drawing_number}: Part/item number(s) verified in drawing schedule table."))
+        messages.append(_msg("✓", f"Drawing {drawing_number}: Position/item number(s) {', '.join(part_numbers) if part_numbers else ''} verified in drawing schedule table."))
     elif pn_match == "FAIL":
-        found_str = f" (found in table: {found_pn})" if found_pn else ""
+        found_str = f" (table contains: {found_pn})" if found_pn else ""
         messages.append(_msg("✗", (
-            f"Drawing {drawing_number}: Part/item number(s) from item long text not found in "
-            f"drawing schedule/BOM table{found_str}. Please verify the drawing covers the correct items."
+            f"Drawing {drawing_number}: Position/item number(s) {', '.join(part_numbers) if part_numbers else ''} "
+            f"from item long text not found in drawing schedule/parts list{found_str}. "
+            "Please verify this drawing covers the correct items."
         )))
         blockers += 1
     elif pn_match == "UNCLEAR":
-        messages.append(_msg("⚠", f"Drawing {drawing_number}: Part/item numbers could not be clearly read from schedule table. Please manually verify."))
-    # NOT_CHECKED: no schedule table visible — silently skip
+        messages.append(_msg("⚠", (
+            f"Drawing {drawing_number}: Position/item numbers could not be clearly read from the "
+            "schedule table. Please manually verify the drawing lists the correct items."
+        )))
+    elif pn_match == "NOT_CHECKED":
+        messages.append(_msg("⚠", (
+            f"Drawing {drawing_number}: No parts list or schedule table was found in this drawing. "
+            f"Please manually confirm position/item number(s) {', '.join(part_numbers) if part_numbers else ''} "
+            "are covered by this drawing."
+        )))
 
     if notes:
         messages.append(_msg("⚠", f"Drawing {drawing_number}: {notes}"))

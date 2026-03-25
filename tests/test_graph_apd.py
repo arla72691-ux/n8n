@@ -4,7 +4,7 @@ Integration tests for the APD graph flow.
 New validation logic (no Drive):
   - Requires an uploaded drawing attachment.
   - Gemini reads the drawing's title block and schedule/BOM table.
-  - Checks: has_drawings, drawing_number_match, revision_match, part_number_match.
+  - Checks: has_drawings, drawing_number_match, revision_match, position_number_match.
 """
 import pytest
 from unittest.mock import patch, MagicMock
@@ -42,10 +42,10 @@ _ALL_PASS_GEMINI = {
     "has_drawings": "PASS",
     "drawing_number_match": "PASS",
     "revision_match": "PASS",
-    "part_number_match": "PASS",
+    "position_number_match": "PASS",
     "found_drawing_number": "4802-1594",
     "found_revision": "0",
-    "found_part_numbers": "P3",
+    "found_position_numbers": "P3",
     "notes": "",
 }
 
@@ -158,14 +158,14 @@ def test_apd_revision_mismatch_is_blocker():
 
 
 # ---------------------------------------------------------------------------
-# part_number_match=FAIL → blocker
+# position_number_match=FAIL → blocker
 # ---------------------------------------------------------------------------
 
-def test_apd_part_number_mismatch_is_blocker():
+def test_apd_position_number_mismatch_is_blocker():
     gemini_json = {
         **_ALL_PASS_GEMINI,
-        "part_number_match": "FAIL",
-        "found_part_numbers": "P1, P2",
+        "position_number_match": "FAIL",
+        "found_position_numbers": "P1, P2",
     }
     mock_s = _mock_settings()
     with patch("app.nodes.apd_nodes.get_settings", return_value=mock_s), \
@@ -177,15 +177,16 @@ def test_apd_part_number_mismatch_is_blocker():
 
     assert result["blocker_count"] >= 1
     blocker_texts = " ".join(m["text"] for m in result["validation_messages"] if m["icon"] == "✗")
-    assert "part" in blocker_texts.lower() or "item" in blocker_texts.lower()
+    assert "position" in blocker_texts.lower() or "item" in blocker_texts.lower()
 
 
 # ---------------------------------------------------------------------------
-# part_number_match=NOT_CHECKED → no blocker (no BOM table visible on drawing)
+# position_number_match=NOT_CHECKED → warning (no BOM table), not a blocker
 # ---------------------------------------------------------------------------
 
-def test_apd_part_number_not_checked_no_blocker():
-    gemini_json = {**_ALL_PASS_GEMINI, "part_number_match": "NOT_CHECKED"}
+def test_apd_position_number_not_checked_gives_warning():
+    """No schedule table on drawing → ⚠ warning to manually verify, no blocker."""
+    gemini_json = {**_ALL_PASS_GEMINI, "position_number_match": "NOT_CHECKED"}
     mock_s = _mock_settings()
     with patch("app.nodes.apd_nodes.get_settings", return_value=mock_s), \
          patch("app.services.gemini_service.validate_document", return_value="{}"), \
@@ -195,6 +196,8 @@ def test_apd_part_number_not_checked_no_blocker():
         result = graph.invoke(_make_state(APD_LINE, uploaded_files=[_DRAWING_FILE]))
 
     assert result["blocker_count"] == 0
+    warn_texts = " ".join(m["text"] for m in result["validation_messages"] if m["icon"] == "⚠")
+    assert "manually confirm" in warn_texts.lower() or "no parts list" in warn_texts.lower()
 
 
 # ---------------------------------------------------------------------------
