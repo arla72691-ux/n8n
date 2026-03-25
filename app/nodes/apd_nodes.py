@@ -77,10 +77,14 @@ def validate_documents(state: PRValidationState) -> dict:
         part_numbers = [i.position for i in drawing_items if i.position]
 
         # Find the uploaded drawing attachment for this drawing number.
-        # First try matching by filename; fall back to any file tagged as "drawing".
+        # 1. Match by drawing number in filename
+        # 2. Any file explicitly tagged as "drawing"
+        # 3. Any file with no doc_type set (APD uploads from the frontend)
         uploaded = _find_uploaded_file_for_drawing(drawing_number, uploaded_files)
         if not uploaded:
             uploaded = next((f for f in uploaded_files if f.get("doc_type") == "drawing"), None)
+        if not uploaded:
+            uploaded = next((f for f in uploaded_files if not f.get("doc_type")), None)
 
         if not uploaded:
             messages.append(_msg("✗", (

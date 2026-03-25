@@ -346,11 +346,12 @@
     "Supply PR (APD)": {
       showLongText: true,
       showAttachment: true,
-      attachmentRequired: false,
-      attachmentLabel: "Drawing Attachments",
-      attachmentHint: "Optional: attach drawings not found in the system. Name files to include the drawing number.",
-      attachmentBadge: "Optional",
-      docTypes: null,         // null = free upload, no doc-type selector
+      attachmentRequired: true,
+      attachmentLabel: "Drawing Attachment(s)",
+      attachmentHint: "Required: attach the engineering drawing(s). Each uploaded file will be validated against the item long text.",
+      attachmentBadge: "Required",
+      docTypes: null,
+      defaultDocType: "drawing",
       multi: true,
       showDescription: false,
     },
@@ -458,11 +459,11 @@
       });
       row.appendChild(sel);
     } else {
-      // Hidden doc_type input (value will be inferred server-side)
+      // Hidden doc_type input — use preset, then config default, then empty
       const hidden = document.createElement("input");
       hidden.type = "hidden";
       hidden.name = "doc_types";
-      hidden.value = presetDocType || "";
+      hidden.value = presetDocType || (currentConfig && currentConfig.defaultDocType) || "";
       row.appendChild(hidden);
     }
 
